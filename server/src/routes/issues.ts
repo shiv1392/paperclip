@@ -1038,6 +1038,13 @@ function canResumePendingReview(
     state.currentParticipant.agentId === returnOwnerAgentId;
 }
 
+function reviewResumeNotEligible(issueId: string) {
+  return conflict(
+    "Only a reconciled run of the current reviewer can resume this pending review. Refresh the task before continuing.",
+    { code: "review_resume_not_eligible", issueId },
+  );
+}
+
 function hasExecutionParticipant(value: unknown) {
   const state = parseIssueExecutionState(value);
   if (!state || state.status !== "pending") return false;
@@ -7151,17 +7158,19 @@ export function issueRoutes(
     issue: {
       id: string;
       companyId: string;
+      status: string;
       projectId: string | null;
       assigneeAgentId: string | null;
       checkoutRunId?: string | null;
       executionRunId?: string | null;
+      executionPolicy?: unknown;
       executionState?: unknown;
     };
     recoveryAction: NonNullable<
       Awaited<ReturnType<typeof recoveryActionsSvc.getActiveForIssue>>
     >;
-    /** Resume the pending review stage itself; it is not bypassed. */
-    resumesPendingReview?: boolean;
+    /** in_review resumes the same pending review stage; it never bypasses it. */
+    sourceIssueStatus: "todo" | "in_review";
   }) {
     const returnOwnerAgentId = input.recoveryAction.returnOwnerAgentId;
     if (
@@ -7198,8 +7207,14 @@ export function issueRoutes(
         },
       );
     }
+    const resumesPendingReview =
+      input.sourceIssueStatus === "in_review" &&
+      canResumePendingReview(input.issue, returnOwnerAgentId);
+    if (input.sourceIssueStatus === "in_review" && !resumesPendingReview) {
+      throw reviewResumeNotEligible(input.issue.id);
+    }
     if (
-      !input.resumesPendingReview &&
+      !resumesPendingReview &&
       parseIssueExecutionState(input.issue.executionState)?.status === "pending"
     ) {
       throw conflict(
@@ -9759,10 +9774,16 @@ export function issueRoutes(
               // arrives. Keep the supported evidence API usable without a dialog.
               assertBoard(req);
               if (
+                sourceIssueStatus === "in_review" &&
+                !activeRecoveryAction &&
+                outcome === "restored" &&
+                !canResumePendingReview(lockedIssue, settled.returnOwnerAgentId)
+              ) {
+                throw reviewResumeNotEligible(lockedIssue.id);
+              }
+              if (
                 activeRecoveryAction ||
-                (sourceIssueStatus !== "todo" &&
-                  !(sourceIssueStatus === "in_review" &&
-                    canResumePendingReview(lockedIssue, settled.returnOwnerAgentId))) ||
+                (sourceIssueStatus !== "todo" && sourceIssueStatus !== "in_review") ||
                 outcome !== "restored"
               ) {
                 throw conflict(
@@ -9800,8 +9821,15 @@ export function issueRoutes(
         const pendingReviewResume =
           outcome === "restored" &&
           sourceIssueStatus === "in_review" &&
-          executionReconciliation !== undefined &&
-          canResumePendingReview(lockedIssue, activeRecoveryAction.returnOwnerAgentId);
+          executionReconciliation !== undefined;
+        if (
+          pendingReviewResume &&
+          !canResumePendingReview(lockedIssue, activeRecoveryAction.returnOwnerAgentId)
+        ) {
+          throw reviewResumeNotEligible(lockedIssue.id);
+        }
+        // Both hand the task back to its recorded owner to continue execution.
+        const continuesExecution = sourceIssueStatus === "todo" || pendingReviewResume;
 
         const workspaceRetry = outcome === "restored" && sourceIssueStatus === "todo"
           ? await prepareRestrictedWorkspaceRetry(tx as unknown as Db, lockedIssue, activeRecoveryAction)
@@ -9889,7 +9917,7 @@ export function issueRoutes(
         }
 
         if (
-          (sourceIssueStatus === "todo" || pendingReviewResume) &&
+          continuesExecution &&
           requiresExecutionReconciliation(activeRecoveryAction.cause)
         ) {
           assertBoard(req);
@@ -9902,6 +9930,7 @@ export function issueRoutes(
               activeRecoveryAction.evidence.runId ??
               activeRecoveryAction.evidence.sourceRunId,
             decision: executionReconciliation,
+            ...(pendingReviewResume ? { requireNeverStarted: true } : {}),
           });
         } else if (executionReconciliation) {
           throw conflict(
@@ -9910,7 +9939,7 @@ export function issueRoutes(
         }
 
         let chatRetry: { actionId: string; issueId: string } | null = null;
-        if (outcome === "restored" && (sourceIssueStatus === "todo" || pendingReviewResume)) {
+        if (outcome === "restored" && continuesExecution) {
           const [chatBinding] = await tx
             .select({ id: chatConversations.id })
             .from(chatConversations)
@@ -9999,7 +10028,7 @@ export function issueRoutes(
         if (sourceStatusChanged) {
           const safeHandBack =
             outcome === "restored" &&
-            (sourceIssueStatus === "todo" || pendingReviewResume) &&
+            continuesExecution &&
             activeRecoveryAction.returnOwnerAgentId != null &&
             lockedIssue.assigneeAgentId ===
               activeRecoveryAction.returnOwnerAgentId;
@@ -10008,16 +10037,9 @@ export function issueRoutes(
               req,
               issue: lockedIssue,
               recoveryAction: activeRecoveryAction,
-              resumesPendingReview: pendingReviewResume,
+              sourceIssueStatus: pendingReviewResume ? "in_review" : "todo",
             });
-            if (pendingReviewResume) {
-              const readiness = await svc.getDependencyReadiness(lockedIssue.id, tx);
-              if (readiness.unresolvedBlockerCount > 0) {
-                throw conflict("Resolve the task’s blockers before resuming its review.", {
-                  code: "disposition_recovery_retry_blocked",
-                });
-              }
-            }
+            if (pendingReviewResume) await assertRecoveryRetryReady(tx as unknown as Db, lockedIssue);
           } else {
             await requireRecoverySourceMutationAuthority(req, lockedIssue);
           }

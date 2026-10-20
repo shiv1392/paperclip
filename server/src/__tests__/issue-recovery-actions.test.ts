@@ -19,6 +19,7 @@ import {
   createDb,
   environmentLeases,
   environments,
+  executionWorkspaces,
   heartbeatRuns,
   issueComments,
   issueApprovals,
@@ -166,6 +167,7 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(environments);
+    await db.delete(executionWorkspaces);
     await db.delete(issueInboxArchives);
     await db.delete(issues);
     await db.delete(approvals);
@@ -1874,9 +1876,14 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       lastDecisionOutcome: null,
       changesRequestedCount: 0,
     };
+    const [workspace] = await db.insert(executionWorkspaces).values({ companyId, sourceIssueId,
+      mode: "isolated_workspace", strategyType: "git_worktree", name: "Review workspace" }).returning();
     await db.update(issues).set({
       status: "blocked",
       assigneeAgentId: reviewerId,
+      executionWorkspaceId: workspace!.id,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "reuse_existing" },
       executionPolicy: {
         mode: "normal",
         commentRequired: true,
@@ -1908,12 +1915,16 @@ describeEmbeddedPostgres("issue recovery actions", () => {
   it("resumes the same pending reviewer after a reconciled never-started run without deciding the stage", async () => {
     const f = await seedBlockedPendingReview();
     const app = createApp();
-    const resolved = await request(app).post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`)
-      .send(f.body).expect(200);
+    const [resolved, concurrent] = await Promise.all([1, 2].map(() =>
+      request(app).post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`).send(f.body)));
+    expect([resolved.status, concurrent.status]).toEqual([200, 200]);
+    if (resolved.body.issue.status !== "in_review") throw new Error("primary resolve did not resume review");
+    expect(f.issue.executionWorkspaceId).toEqual(expect.any(String));
     expect(resolved.body.issue).toMatchObject({
       status: "in_review", assigneeAgentId: f.reviewerId, executionState: f.executionState,
       executionWorkspaceId: f.issue.executionWorkspaceId,
-      executionWorkspacePreference: f.issue.executionWorkspacePreference,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "reuse_existing" },
     });
     expect(resolved.body.recoveryAction).toMatchObject({ id: f.action.id, status: "resolved", outcome: "handed_back" });
     expect(await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.sourceIssueId)))
@@ -1948,15 +1959,20 @@ describeEmbeddedPostgres("issue recovery actions", () => {
   });
 
   it.each([
-    "reviewer agent actor",
-    "stale run evidence",
-    "unreleased run lease",
-    "pending approval",
-    "budget-paused project",
-    "approval stage",
-    "participant changed",
-    "unresolved blocker",
-  ] as const)("keeps the pending review blocked when %s", async (gate) => {
+    ["reviewer agent actor", 403, { error: "Board access required" }],
+    ["stale run evidence", 409, { error: expect.stringContaining("Reconcile the recorded execution") }],
+    ["started run", 409, { details: { code: "review_resume_run_started" } }],
+    ["mixed action outcome", 409, { details: { code: "review_resume_run_started" } }],
+    ["unreleased run lease", 409, { error: expect.stringContaining("has not finished releasing its authority") }],
+    ["conflicting execution run", 409, { details: { code: "recovery_source_run_lock" } }],
+    ["pending approval", 409, { details: { code: "recovery_governed_approval_pending" } }],
+    ["budget-paused project", 409, { error: "Project is paused because its budget hard-stop was reached" }],
+    ["paused reviewer", 409, { details: { code: "disposition_recovery_owner_unavailable" } }],
+    ["approval stage", 409, { details: { code: "review_resume_not_eligible" } }],
+    ["participant changed", 409, { details: { code: "review_resume_not_eligible" } }],
+    ["unresolved blocker", 409, { details: { code: "disposition_recovery_retry_blocked" } }],
+    ["action of another issue", 404, { error: "Active recovery action not found" }],
+  ] as const)("keeps the pending review blocked when %s", async (gate, status, expected) => {
     const f = await seedBlockedPendingReview();
     let actor: any = undefined;
     let body: Record<string, unknown> = f.body;
@@ -1967,6 +1983,28 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     }
     if (gate === "stale run evidence") {
       body = { ...f.body, executionReconciliation: { ...f.body.executionReconciliation, runId: randomUUID() } };
+    }
+    if (gate === "started run") {
+      await db.update(heartbeatRuns).set({ startedAt: new Date() }).where(eq(heartbeatRuns.id, f.runId));
+    }
+    if (gate === "mixed action outcome") {
+      body = { ...f.body, executionReconciliation: { ...f.body.executionReconciliation, actionOutcome: "mixed" } };
+    }
+    if (gate === "conflicting execution run") {
+      const liveRunId = randomUUID();
+      await seedHeartbeatRun({ companyId: f.companyId, agentId: f.coderId, runId: liveRunId, issueId: f.sourceIssueId });
+      await db.update(issues).set({ executionRunId: liveRunId }).where(eq(issues.id, f.sourceIssueId));
+    }
+    if (gate === "paused reviewer") {
+      await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.reviewerId));
+    }
+    if (gate === "action of another issue") {
+      const otherIssueId = randomUUID();
+      await db.insert(issues).values({ id: otherIssueId, companyId: f.companyId, title: "Other", status: "blocked",
+        priority: "medium", issueNumber: 3, identifier: `${f.prefix}-3` });
+      const [other] = await db.insert(issueRecoveryActions).values({ ...f.action, id: randomUUID(),
+        sourceIssueId: otherIssueId, fingerprint: randomUUID() }).returning();
+      body = { ...f.body, actionId: other!.id };
     }
     if (gate === "unreleased run lease") {
       await db.insert(environmentLeases).values({ companyId: f.companyId, issueId: f.sourceIssueId,
@@ -2004,10 +2042,13 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     const [issueBefore] = await db.select().from(issues).where(eq(issues.id, f.sourceIssueId));
     const response = await request(createApp(actor))
       .post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`).send(body);
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(status);
+    expect(response.body).toMatchObject(expected);
     expect((await db.select().from(issues).where(eq(issues.id, f.sourceIssueId)))[0]).toEqual(issueBefore);
     const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, f.action.id));
     expect(action).toMatchObject({ status: "resolved", outcome: "blocked", evidence: f.action.evidence });
+    expect(await db.select().from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.idempotencyKey, `execution-reconciliation:${f.action.id}`))).toHaveLength(0);
     expect(await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.sourceIssueId)))
       .toHaveLength(0);
   });

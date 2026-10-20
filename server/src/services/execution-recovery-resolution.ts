@@ -36,6 +36,8 @@ export async function validateExecutionReconciliation(input: {
   decision: ExecutionReconciliation | undefined;
   /** Board-only source repair: never authorize a continuation of this run. */
   workspaceRepairOnly?: boolean;
+  /** Resuming a pending review requires a run that never started or acted. */
+  requireNeverStarted?: boolean;
 }) {
   const { db, companyId, issueId, agentId, decision } = input;
   if (!decision || decision.runId !== input.sourceRunId || (!agentId && !input.workspaceRepairOnly)) {
@@ -78,6 +80,12 @@ export async function validateExecutionReconciliation(input: {
   ) {
     throw conflict(
       "The recovery source or task owner changed. Inspect the current execution before continuing.",
+    );
+  }
+  if (input.requireNeverStarted && (run.startedAt || decision.actionOutcome !== "not_performed")) {
+    throw conflict(
+      "Only a run that never started and performed no actions can resume a pending review.",
+      { code: "review_resume_run_started" },
     );
   }
   if (hasWorkspaceRestoreFailure(run.resultJson) &&
