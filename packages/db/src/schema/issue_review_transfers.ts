@@ -29,6 +29,12 @@ export const issueReviewTransfers = pgTable(
     removedBlockedIssueId: uuid("removed_blocked_issue_id"),
     receipts: jsonb("receipts").$type<Record<string, unknown>[]>().notNull().default([]),
     receiptRevision: text("receipt_revision"),
+    /**
+     * Revision of the destination's whole review manifest. Every transfer row on
+     * one destination carries the same value; it changes on each transfer or
+     * receipt mutation there, and an approval must name it.
+     */
+    manifestRevision: text("manifest_revision"),
     actorAgentId: uuid("actor_agent_id").references(() => agents.id, { onDelete: "set null" }),
     actorUserId: text("actor_user_id"),
     createdByRunId: uuid("created_by_run_id").references(() => heartbeatRuns.id, { onDelete: "set null" }),
