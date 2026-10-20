@@ -1948,6 +1948,8 @@ export {
   updateIssueSchema,
   stalledReviewDecisionSchema,
   issueExecutionPolicySchema,
+  requestIssueReviewTransferSchema,
+  type RequestIssueReviewTransfer,
   issueExecutionMonitorPolicySchema,
   issueExecutionStateSchema,
   resolveIssueRecoveryActionSchema,

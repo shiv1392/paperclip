@@ -1,0 +1,400 @@
+import { createHash, randomUUID } from "node:crypto";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import {
+  approvals,
+  environmentLeases,
+  heartbeatRuns,
+  issueApprovals,
+  issueExecutionDecisions,
+  issueRelations,
+  issueReviewTransfers,
+  issueThreadInteractions,
+  issues,
+  type Db,
+} from "@paperclipai/db";
+import type { IssueExecutionPolicy, IssueExecutionStage } from "@paperclipai/shared";
+import { conflict, notFound, unprocessable } from "../errors.js";
+import { logActivity } from "./activity-log.js";
+import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
+
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type DbOrTx = Db | Tx;
+
+export type IssueReviewTransferRow = typeof issueReviewTransfers.$inferSelect;
+
+export type ReviewTransferActor = {
+  userId: string | null;
+  agentId: string | null;
+  runId: string | null;
+};
+
+export type RequestReviewTransferInput = {
+  companyId: string;
+  sourceIssueId: string;
+  sourceStageId: string;
+  destinationIssueId: string;
+  expectedSourceUpdatedAt: string;
+  expectedDestinationUpdatedAt: string;
+  removeBlocksIssueId?: string | null;
+  reason: string;
+  idempotencyKey: string;
+  requiredReceipts: { commands: string[] };
+};
+
+const LIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+const OUTSTANDING_SOURCE_STATES = new Set(["pending", "changes_requested", "idle", "none"]);
+
+function fingerprint(input: RequestReviewTransferInput) {
+  const { idempotencyKey: _key, ...rest } = input;
+  return createHash("sha256").update(JSON.stringify(rest)).digest("hex");
+}
+
+function policyStages(policy: IssueExecutionPolicy | null) {
+  return policy?.stages ?? [];
+}
+
+async function lockIssues(tx: Tx, companyId: string, ids: string[]) {
+  // Lock in a stable order so two transfers touching the same pair cannot deadlock.
+  const ordered = [...new Set(ids)].sort();
+  const rows: Array<typeof issues.$inferSelect> = [];
+  for (const id of ordered) {
+    const [row] = await tx
+      .select()
+      .from(issues)
+      .where(and(eq(issues.id, id), eq(issues.companyId, companyId)))
+      .for("update");
+    if (row) rows.push(row);
+  }
+  return new Map(rows.map((row) => [row.id, row]));
+}
+
+async function isAncestor(tx: Tx, companyId: string, ancestorId: string, issueId: string) {
+  let cursor: string | null = issueId;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    const [row]: Array<{ parentId: string | null }> = await tx
+      .select({ parentId: issues.parentId })
+      .from(issues)
+      .where(and(eq(issues.id, cursor), eq(issues.companyId, companyId)));
+    cursor = row?.parentId ?? null;
+    if (cursor === ancestorId) return true;
+  }
+  return false;
+}
+
+async function assertNoLiveExecution(tx: Tx, issue: typeof issues.$inferSelect, role: "source" | "destination") {
+  if (issue.executionRunId || issue.checkoutRunId) {
+    throw conflict(`The ${role} task has an active execution. Wait for it to finish before transferring review.`, {
+      code: "review_transfer_execution_active",
+      issueId: issue.id,
+    });
+  }
+  const [run] = await tx
+    .select({ id: heartbeatRuns.id })
+    .from(heartbeatRuns)
+    .where(and(
+      eq(heartbeatRuns.companyId, issue.companyId),
+      inArray(heartbeatRuns.status, [...LIVE_RUN_STATUSES]),
+      or(
+        eq(heartbeatRuns.nativeIssueId, issue.id),
+        sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issue.id}`,
+      ),
+    ))
+    .limit(1);
+  if (run) {
+    throw conflict(`The ${role} task has a live run. Wait for it to finish before transferring review.`, {
+      code: "review_transfer_execution_active",
+      issueId: issue.id,
+      runId: run.id,
+    });
+  }
+  const [lease] = await tx
+    .select({ id: environmentLeases.id })
+    .from(environmentLeases)
+    .where(and(
+      eq(environmentLeases.companyId, issue.companyId),
+      eq(environmentLeases.issueId, issue.id),
+      eq(environmentLeases.status, "active"),
+    ))
+    .limit(1);
+  if (lease) {
+    throw conflict(`The ${role} task holds an active environment lease.`, {
+      code: "review_transfer_lease_active",
+      issueId: issue.id,
+      leaseId: lease.id,
+    });
+  }
+}
+
+async function assertNoUnresolvedHumanControls(tx: Tx, issue: typeof issues.$inferSelect, role: "source" | "destination") {
+  const [approval] = await tx
+    .select({ id: approvals.id })
+    .from(issueApprovals)
+    .innerJoin(approvals, eq(approvals.id, issueApprovals.approvalId))
+    .where(and(
+      eq(issueApprovals.companyId, issue.companyId),
+      eq(issueApprovals.issueId, issue.id),
+      inArray(approvals.status, ["pending", "revision_requested"]),
+    ))
+    .limit(1);
+  const [interaction] = await tx
+    .select({ id: issueThreadInteractions.id })
+    .from(issueThreadInteractions)
+    .where(and(
+      eq(issueThreadInteractions.companyId, issue.companyId),
+      eq(issueThreadInteractions.issueId, issue.id),
+      eq(issueThreadInteractions.status, "pending"),
+      eq(issueThreadInteractions.effectiveResolverPolicy, "human_only"),
+    ))
+    .limit(1);
+  if (approval || interaction) {
+    throw conflict(`The ${role} task has an unresolved human approval or question.`, {
+      code: "review_transfer_human_control_pending",
+      issueId: issue.id,
+      approvalId: approval?.id ?? null,
+      interactionId: interaction?.id ?? null,
+    });
+  }
+}
+
+function assertUnchanged(issue: typeof issues.$inferSelect, expected: string, role: "source" | "destination") {
+  if (issue.updatedAt.toISOString() !== new Date(expected).toISOString()) {
+    throw conflict(`The ${role} task changed since it was read. Read it again and resend the transfer.`, {
+      code: "review_transfer_stale",
+      issueId: issue.id,
+      expectedUpdatedAt: expected,
+      actualUpdatedAt: issue.updatedAt.toISOString(),
+    });
+  }
+}
+
+function copyStageForDestination(stage: IssueExecutionStage): IssueExecutionStage {
+  return {
+    id: randomUUID(),
+    type: stage.type,
+    approvalsNeeded: stage.approvalsNeeded,
+    participants: stage.participants.map((participant) => ({ ...participant, id: randomUUID() })),
+  };
+}
+
+export function issueReviewTransferService(db: Db) {
+  async function findReplay(tx: DbOrTx, input: RequestReviewTransferInput) {
+    const [existing] = await tx
+      .select()
+      .from(issueReviewTransfers)
+      .where(and(
+        eq(issueReviewTransfers.companyId, input.companyId),
+        eq(issueReviewTransfers.idempotencyKey, input.idempotencyKey),
+      ));
+    if (!existing) return null;
+    if (existing.requestFingerprint !== fingerprint(input)) {
+      throw conflict("This idempotency key was already used for a different transfer.", {
+        code: "review_transfer_idempotency_mismatch",
+        transferId: existing.id,
+      });
+    }
+    return existing;
+  }
+
+  async function transfer(input: RequestReviewTransferInput, actor: ReviewTransferActor) {
+    const replay = await findReplay(db, input);
+    if (replay) return { transfer: replay, replayed: true };
+
+    return db.transaction(async (tx) => {
+      const locked = await lockIssues(tx, input.companyId, [input.sourceIssueId, input.destinationIssueId]);
+      // Re-check under the lock: a concurrent request with the same key may have committed first.
+      const lockedReplay = await findReplay(tx, input);
+      if (lockedReplay) return { transfer: lockedReplay, replayed: true };
+
+      const source = locked.get(input.sourceIssueId);
+      const destination = locked.get(input.destinationIssueId);
+      if (!source) throw notFound("Source issue not found");
+      if (!destination) throw notFound("Destination issue not found");
+      if (source.id === destination.id) {
+        throw unprocessable("A review cannot be transferred to its own task.", { code: "review_transfer_invalid_destination" });
+      }
+      if (destination.parentId !== null || !(await isAncestor(tx, input.companyId, destination.id, source.id))) {
+        throw unprocessable("The destination must be the top-level delivery that contains the source task.", {
+          code: "review_transfer_invalid_destination",
+        });
+      }
+      assertUnchanged(source, input.expectedSourceUpdatedAt, "source");
+      assertUnchanged(destination, input.expectedDestinationUpdatedAt, "destination");
+      if (source.status === "done" || source.status === "cancelled") {
+        throw unprocessable("A closed task has no outstanding review to transfer.", { code: "review_transfer_source_closed" });
+      }
+      if (destination.status === "done" || destination.status === "cancelled") {
+        throw unprocessable("The destination delivery is closed.", { code: "review_transfer_invalid_destination" });
+      }
+
+      const sourcePolicy = normalizeIssueExecutionPolicy(source.executionPolicy ?? null);
+      const sourceStage = policyStages(sourcePolicy).find((stage) => stage.id === input.sourceStageId);
+      if (!sourceStage) {
+        throw unprocessable("The source stage is not part of the source task's review policy.", {
+          code: "review_transfer_stage_not_found",
+        });
+      }
+      const sourceState = parseIssueExecutionState(source.executionState);
+      const stateStatus = sourceState?.status ?? "none";
+      const stageIsCurrent = sourceState?.currentStageId === sourceStage.id;
+      const stageCompleted = sourceState?.completedStageIds.includes(sourceStage.id) ?? false;
+      if (stageCompleted || !OUTSTANDING_SOURCE_STATES.has(stateStatus)
+        || ((stateStatus === "pending" || stateStatus === "changes_requested") && !stageIsCurrent)) {
+        throw unprocessable("The source stage has no outstanding review obligation.", {
+          code: "review_transfer_stage_not_outstanding",
+          stateStatus,
+        });
+      }
+
+      const destinationPolicy = normalizeIssueExecutionPolicy(destination.executionPolicy ?? null);
+      if (!destinationPolicy || destinationPolicy.stages.length === 0) {
+        throw unprocessable("The destination has no native review gate to hold this obligation.", {
+          code: "review_transfer_destination_gate_missing",
+        });
+      }
+      const destinationState = parseIssueExecutionState(destination.executionState);
+      if (destinationState && destinationState.status !== "idle") {
+        throw conflict("The destination review has already started. Transfer obligations before it starts.", {
+          code: "review_transfer_destination_review_active",
+        });
+      }
+
+      await assertNoLiveExecution(tx, source, "source");
+      await assertNoLiveExecution(tx, destination, "destination");
+      await assertNoUnresolvedHumanControls(tx, source, "source");
+      await assertNoUnresolvedHumanControls(tx, destination, "destination");
+
+      const [claimed] = await tx
+        .select({ id: issueReviewTransfers.id })
+        .from(issueReviewTransfers)
+        .where(and(
+          eq(issueReviewTransfers.companyId, input.companyId),
+          eq(issueReviewTransfers.sourceIssueId, source.id),
+          eq(issueReviewTransfers.sourceStageId, sourceStage.id),
+        ));
+      if (claimed) {
+        throw conflict("This review stage was already transferred.", {
+          code: "review_transfer_already_transferred",
+          transferId: claimed.id,
+        });
+      }
+
+      let removedEdge: { blockerId: string; blockedId: string } | null = null;
+      if (input.removeBlocksIssueId) {
+        const deleted = await tx
+          .delete(issueRelations)
+          .where(and(
+            eq(issueRelations.companyId, input.companyId),
+            eq(issueRelations.issueId, source.id),
+            eq(issueRelations.relatedIssueId, input.removeBlocksIssueId),
+            eq(issueRelations.type, "blocks"),
+          ))
+          .returning({ id: issueRelations.id });
+        if (deleted.length !== 1) {
+          throw unprocessable("The named scheduling edge does not exist from the source task.", {
+            code: "review_transfer_edge_not_found",
+          });
+        }
+        removedEdge = { blockerId: source.id, blockedId: input.removeBlocksIssueId };
+      }
+
+      const decisions = await tx
+        .select({ id: issueExecutionDecisions.id, outcome: issueExecutionDecisions.outcome })
+        .from(issueExecutionDecisions)
+        .where(and(
+          eq(issueExecutionDecisions.companyId, input.companyId),
+          eq(issueExecutionDecisions.issueId, source.id),
+          eq(issueExecutionDecisions.stageId, sourceStage.id),
+        ));
+
+      const mappedStage = copyStageForDestination(sourceStage);
+      // Transferred obligations precede the existing whole-delivery gate so
+      // every one is decided before the delivery itself is reviewed.
+      const nextDestinationPolicy: IssueExecutionPolicy = {
+        ...destinationPolicy,
+        stages: [mappedStage, ...destinationPolicy.stages],
+      };
+      const now = new Date();
+      await tx
+        .update(issues)
+        .set({ executionPolicy: nextDestinationPolicy as unknown as Record<string, unknown>, updatedAt: now })
+        .where(and(eq(issues.id, destination.id), eq(issues.companyId, input.companyId)));
+
+      const [row] = await tx
+        .insert(issueReviewTransfers)
+        .values({
+          companyId: input.companyId,
+          sourceIssueId: source.id,
+          sourceStageId: sourceStage.id,
+          destinationIssueId: destination.id,
+          destinationStageId: mappedStage.id,
+          status: "held",
+          idempotencyKey: input.idempotencyKey,
+          requestFingerprint: fingerprint(input),
+          reason: input.reason,
+          obligation: {
+            stageType: sourceStage.type,
+            participants: sourceStage.participants,
+            approvalsNeeded: sourceStage.approvalsNeeded,
+            commentRequired: sourcePolicy?.commentRequired ?? true,
+            returnAssignee: sourceState?.returnAssignee ?? null,
+            currentParticipant: sourceState?.currentParticipant ?? null,
+            sourceStateStatus: stateStatus,
+            changesRequestedCount: sourceState?.changesRequestedCount ?? 0,
+            decisionIds: decisions.map((decision) => decision.id),
+            decisionOutcomes: decisions.map((decision) => decision.outcome),
+            sourceUpdatedAt: source.updatedAt.toISOString(),
+            destinationUpdatedAt: destination.updatedAt.toISOString(),
+            requiredReceipts: input.requiredReceipts,
+          },
+          removedBlockerIssueId: removedEdge?.blockerId ?? null,
+          removedBlockedIssueId: removedEdge?.blockedId ?? null,
+          actorAgentId: actor.agentId,
+          actorUserId: actor.userId,
+          createdByRunId: actor.runId,
+        })
+        .returning();
+
+      const details = {
+        transferId: row!.id,
+        sourceIssueId: source.id,
+        sourceStageId: sourceStage.id,
+        destinationIssueId: destination.id,
+        destinationStageId: mappedStage.id,
+        removedBlocksIssueId: removedEdge?.blockedId ?? null,
+        reason: input.reason,
+      };
+      for (const entityId of [source.id, destination.id]) {
+        await logActivity(tx as unknown as Db, {
+          companyId: input.companyId,
+          actorType: actor.agentId ? "agent" : "user",
+          actorId: actor.agentId ?? actor.userId ?? "board",
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.review_transferred",
+          entityType: "issue",
+          entityId,
+          details,
+        });
+      }
+      return { transfer: row!, replayed: false };
+    });
+  }
+
+  async function readTransfers(companyId: string, issueId: string) {
+    const rows = await db
+      .select()
+      .from(issueReviewTransfers)
+      .where(and(
+        eq(issueReviewTransfers.companyId, companyId),
+        or(eq(issueReviewTransfers.sourceIssueId, issueId), eq(issueReviewTransfers.destinationIssueId, issueId)),
+      ));
+    return {
+      outgoing: rows.filter((row) => row.sourceIssueId === issueId),
+      incoming: rows.filter((row) => row.destinationIssueId === issueId),
+    };
+  }
+
+  return { transfer, readTransfers };
+}
