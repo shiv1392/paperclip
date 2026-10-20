@@ -1,3 +1,4 @@
+import { findReviewTransferHold } from "../issue-review-transfer.js";
 import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
 import { onboardingFirstTaskAwaitingUserSql } from "./onboarding-first-task-wait.js";
 import { isAiAuthenticationBlocked } from "../ai-auth-failure.js";
@@ -4501,6 +4502,13 @@ export function recoveryService(
           ? participantAgentId
           : issue.assigneeAgentId;
       if (!agentId) {
+        result.skipped += 1;
+        continue;
+      }
+
+      // A transferred review is a durable wait on the delivery, not stranded
+      // work: never wake, retry or escalate its held reviewer here.
+      if (await findReviewTransferHold(db, { companyId: issue.companyId, issueId: issue.id, agentId })) {
         result.skipped += 1;
         continue;
       }

@@ -1,3 +1,4 @@
+import { findReviewTransferHold } from "../../../services/issue-review-transfer.js";
 import { isAcknowledgedNativeReassignmentStop, isAcknowledgedNativeStop } from "../../../services/acknowledged-native-stop.js";
 import { readRunCancellation } from "../../../services/run-cancellation.js";
 import { isCompletedOnboardingHandoffWake } from "../../../services/chat-completion-delivery.js";
@@ -361,6 +362,20 @@ function buildTransaction(tx: Db, deps: WakeQueuePostgresAdapterDeps, db: Db, ru
     },
 
     async getPauseHoldFacts({ companyId, issueId, wakeAgentId, deferredContextSeed, requestedByActorType, requestedByActorId }) {
+      // A transferred review holds its reviewer the same way a pause hold does,
+      // so the existing cancel path applies and no interaction wake is exempt.
+      const reviewTransferHold = await findReviewTransferHold(tx, { companyId, issueId, agentId: wakeAgentId });
+      if (reviewTransferHold) {
+        return {
+          activePauseHold: true,
+          treeHoldInteractionWake: false,
+          holdId: reviewTransferHold.transferId,
+          rootIssueId: reviewTransferHold.destinationIssueId,
+          mode: "review_transfer",
+          reason: "This review moved to the delivery.",
+          releasePolicy: null,
+        };
+      }
       const activePauseHold = await treeControlSvc.getActivePauseHoldGate(companyId, issueId);
       if (!activePauseHold) {
         return {
@@ -567,7 +582,8 @@ function buildTransaction(tx: Db, deps: WakeQueuePostgresAdapterDeps, db: Db, ru
       return row !== null;
     },
 
-    async isAutomaticRecoverySuppressedByPauseHold({ companyId, issueId }) {
+    async isAutomaticRecoverySuppressedByPauseHold({ companyId, issueId, agentId }) {
+      if (agentId && await findReviewTransferHold(tx, { companyId, issueId, agentId })) return true;
       return isAutomaticRecoverySuppressedByPauseHold(tx, companyId, issueId, treeControlSvc);
     },
 

@@ -1,3 +1,4 @@
+import { findReviewTransferHold } from "../issue-review-transfer.js";
 import { withExternalAdmissionGuard, assertNoExternalOverlap } from "../../modules/external-agents/index.js";
 import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
 import { normalizeAgentNameKey } from "./retries.js";
@@ -2927,6 +2928,30 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               triggerDetail,
               reason: "issue_execution_issue_not_found",
               payload,
+              status: "skipped",
+              requestedByActorType: opts.requestedByActorType ?? null,
+              requestedByActorId: opts.requestedByActorId ?? null,
+              idempotencyKey: opts.idempotencyKey ?? null,
+              finishedAt: new Date(),
+            });
+            return { kind: "skipped" as const };
+          }
+
+          const reviewTransferHold = await findReviewTransferHold(tx as unknown as Db, {
+            companyId: agent.companyId,
+            issueId: issue.id,
+            agentId,
+          });
+          if (reviewTransferHold) {
+            // The review moved to the delivery; never wake its reviewer here.
+            await tx.insert(agentWakeupRequests).values({
+              ...durableReceiptFields,
+              companyId: agent.companyId,
+              agentId,
+              source,
+              triggerDetail,
+              reason: "issue_review_transferred",
+              payload: { ...(payload ?? {}), issueId: issue.id, reviewTransfer: reviewTransferHold },
               status: "skipped",
               requestedByActorType: opts.requestedByActorType ?? null,
               requestedByActorId: opts.requestedByActorId ?? null,
