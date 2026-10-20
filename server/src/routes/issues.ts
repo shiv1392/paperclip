@@ -1017,6 +1017,27 @@ async function buildIssueWorkspaceChangeActivityDetails(
   };
 }
 
+/**
+ * A stopped review run whose stage is still pending can resume that same stage.
+ * The current agent reviewer must be both the assignee and the recorded owner.
+ */
+function canResumePendingReview(
+  issue: { status: string; assigneeAgentId: string | null; executionPolicy?: unknown; executionState?: unknown },
+  returnOwnerAgentId: string | null,
+) {
+  const state = parseIssueExecutionState(issue.executionState);
+  const stage = normalizeIssueExecutionPolicy(issue.executionPolicy ?? null)?.stages
+    .find((candidate) => candidate.id === state?.currentStageId);
+  return issue.status === "blocked" &&
+    returnOwnerAgentId != null &&
+    issue.assigneeAgentId === returnOwnerAgentId &&
+    state?.status === "pending" &&
+    state.currentStageType === "review" &&
+    stage?.type === "review" &&
+    state.currentParticipant?.type === "agent" &&
+    state.currentParticipant.agentId === returnOwnerAgentId;
+}
+
 function hasExecutionParticipant(value: unknown) {
   const state = parseIssueExecutionState(value);
   if (!state || state.status !== "pending") return false;
@@ -7095,6 +7116,8 @@ export function issueRoutes(
     recoveryAction: NonNullable<
       Awaited<ReturnType<typeof recoveryActionsSvc.getActiveForIssue>>
     >;
+    /** Resume the pending review stage itself; it is not bypassed. */
+    resumesPendingReview?: boolean;
   }) {
     const returnOwnerAgentId = input.recoveryAction.returnOwnerAgentId;
     if (
@@ -7132,6 +7155,7 @@ export function issueRoutes(
       );
     }
     if (
+      !input.resumesPendingReview &&
       parseIssueExecutionState(input.issue.executionState)?.status === "pending"
     ) {
       throw conflict(
@@ -9692,7 +9716,9 @@ export function issueRoutes(
               assertBoard(req);
               if (
                 activeRecoveryAction ||
-                sourceIssueStatus !== "todo" ||
+                (sourceIssueStatus !== "todo" &&
+                  !(sourceIssueStatus === "in_review" &&
+                    canResumePendingReview(lockedIssue, settled.returnOwnerAgentId))) ||
                 outcome !== "restored"
               ) {
                 throw conflict(
@@ -9726,6 +9752,12 @@ export function issueRoutes(
           activeRecoveryAction,
           { source: "recovery_action_resolution" },
         );
+        // Only a board-reconciled execution may resume a pending review stage.
+        const pendingReviewResume =
+          outcome === "restored" &&
+          sourceIssueStatus === "in_review" &&
+          executionReconciliation !== undefined &&
+          canResumePendingReview(lockedIssue, activeRecoveryAction.returnOwnerAgentId);
 
         const workspaceRetry = outcome === "restored" && sourceIssueStatus === "todo"
           ? await prepareRestrictedWorkspaceRetry(tx as unknown as Db, lockedIssue, activeRecoveryAction)
@@ -9849,7 +9881,7 @@ export function issueRoutes(
         }
 
         if (
-          sourceIssueStatus === "todo" &&
+          (sourceIssueStatus === "todo" || pendingReviewResume) &&
           requiresExecutionReconciliation(activeRecoveryAction.cause)
         ) {
           assertBoard(req);
@@ -9870,7 +9902,7 @@ export function issueRoutes(
         }
 
         let chatRetry: { actionId: string; issueId: string } | null = null;
-        if (outcome === "restored" && sourceIssueStatus === "todo") {
+        if (outcome === "restored" && (sourceIssueStatus === "todo" || pendingReviewResume)) {
           const [chatBinding] = await tx
             .select({ id: chatConversations.id })
             .from(chatConversations)
@@ -9883,6 +9915,12 @@ export function issueRoutes(
               ),
             )
             .limit(1);
+          if (chatBinding && pendingReviewResume) {
+            throw conflict(
+              "Resume this review from the connected conversation; this recovery action has not been resolved.",
+              { code: "chat_recovery_requires_authorized_context" },
+            );
+          }
           if (chatBinding) {
             // Admit the exact server-owned recovery evidence before resolving
             // either record. The durable worker, not a best-effort generic wake,
@@ -9953,7 +9991,7 @@ export function issueRoutes(
         if (sourceStatusChanged) {
           const safeHandBack =
             outcome === "restored" &&
-            sourceIssueStatus === "todo" &&
+            (sourceIssueStatus === "todo" || pendingReviewResume) &&
             activeRecoveryAction.returnOwnerAgentId != null &&
             lockedIssue.assigneeAgentId ===
               activeRecoveryAction.returnOwnerAgentId;
@@ -9962,7 +10000,16 @@ export function issueRoutes(
               req,
               issue: lockedIssue,
               recoveryAction: activeRecoveryAction,
+              resumesPendingReview: pendingReviewResume,
             });
+            if (pendingReviewResume) {
+              const readiness = await svc.getDependencyReadiness(lockedIssue.id, tx);
+              if (readiness.unresolvedBlockerCount > 0) {
+                throw conflict("Resolve the task’s blockers before resuming its review.", {
+                  code: "disposition_recovery_retry_blocked",
+                });
+              }
+            }
           } else {
             await requireRecoverySourceMutationAuthority(req, lockedIssue);
           }
@@ -10074,7 +10121,7 @@ export function issueRoutes(
 
         const recordedOutcome =
           outcome === "restored" &&
-          issue.status === "todo" &&
+          (issue.status === "todo" || pendingReviewResume) &&
           activeRecoveryAction.returnOwnerAgentId != null &&
           issue.assigneeAgentId === activeRecoveryAction.returnOwnerAgentId
             ? "handed_back"

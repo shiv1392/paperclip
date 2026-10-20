@@ -515,6 +515,15 @@ the successor to the original failed run. Repair does not reset the automatic
 retry budget. Transient failures retain the existing
 bounded retry policy. Archive confinement remains required.
 
+A stopped run can also leave a pending review stage behind. When the current
+agent reviewer is the assignee and the recorded return owner, a board operator
+can record `executionReconciliation` with `sourceIssueStatus: "in_review"`. The
+task then returns to the same pending stage and reviewer. Recovery does not
+record a decision or reset the stage, and the existing delivery identity wakes
+the reviewer. A `todo` hand-back still cannot bypass a pending stage. Agents
+cannot record reconciliation. The usual lease, approval, pause, budget and
+blocker checks still apply.
+
 Sandbox restore tasks also write a `Workspace restore diagnostic` line to the
 run log on failure. `phase` is `workspace` or `asset`, so a failed staged-asset
 copy-back (such as credentials) can be distinguished from workspace restoration. The line
