@@ -119,7 +119,7 @@ describeEmbeddedPostgres("issue review transfers", () => {
   }
 
   /**
-   * Mirrors ORI-207 -> ORI-61: a child with a pending reviewer stage that
+   * Models a child with a pending reviewer stage that
    * blocks a sibling final-suite child, under a top-level delivery whose own
    * whole-delivery gate has not started.
    */
@@ -138,8 +138,8 @@ describeEmbeddedPostgres("issue review transfers", () => {
       } as any);
     }
     await db.insert(agents).values([
-      { id: reviewerId, companyId, name: "Lucas", role: "qa", status: "idle", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
-      { id: builderId, companyId, name: "Simon", role: "engineer", status: "idle", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: reviewerId, companyId, name: "Reviewer", role: "qa", status: "idle", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: builderId, companyId, name: "Builder", role: "engineer", status: "idle", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
     ]);
     const parentId = randomUUID();
     const sourceId = randomUUID();
@@ -1162,9 +1162,9 @@ describeEmbeddedPostgres("issue review transfers", () => {
     });
   });
   describe("migration map", () => {
-    it("maps ORI-207 and ORI-134 to distinct stages on ORI-61 ahead of its own gate, with the suite evidence attached later", async () => {
+    it("maps the pending child and the final-suite child to distinct delivery stages ahead of its own gate, with the suite evidence attached later", async () => {
       const fixture = await seedDelivery();
-      // ORI-134: the final-suite child has a configured review that has not started.
+      // The final-suite child has a configured review that has not started.
       const suiteStage = reviewStage(fixture.reviewerId);
       await db.update(issues).set({
         executionPolicy: { mode: "normal", commentRequired: true, stages: [suiteStage] },
@@ -1192,7 +1192,7 @@ describeEmbeddedPostgres("issue review transfers", () => {
         })
         .expect(201);
       expect(second.body.transfer.obligation.sourceStateStatus).toBe("none");
-      // The ORI-134 obligation needs both child results; the source result alone is refused.
+      // The final-suite obligation needs both child results; the source result alone is refused.
       const partial = await request(createApp())
         .post(`/api/review-transfers/${second.body.transfer.id}/receipts`)
         .send(receiptBody(fixture, {
@@ -1210,13 +1210,13 @@ describeEmbeddedPostgres("issue review transfers", () => {
         fixture.parentGate.id,
       ]);
       expect(new Set(stageIds).size).toBe(3);
-      // Only the circular ORI-207 -> ORI-134 edge is gone, so ORI-134 can run
-      // its suite; the real ORI-134 -> ORI-61 delivery dependency remains.
+      // Only the circular pending-child -> suite-child edge is gone, so the suite child can run
+      // its suite; its real dependency on the delivery remains.
       const edges = await db.select().from(issueRelations).where(eq(issueRelations.companyId, fixture.companyId));
       expect(edges.map((edge) => [edge.issueId, edge.relatedIssueId])).toEqual([[fixture.suiteId, fixture.parentId]]);
     });
 
-    it("carries ORI-117's changes-requested history to ORI-104 without approving it", async () => {
+    it("carries a child's changes-requested history to its delivery without approving it", async () => {
       const fixture = await seedDelivery();
       const decisionId = randomUUID();
       await db.insert(issueExecutionDecisions).values({
@@ -1247,7 +1247,7 @@ describeEmbeddedPostgres("issue review transfers", () => {
       expect(after!.executionState).toEqual(changesRequested);
     });
 
-    it("moves ORI-205's pending review onto ORI-184's prepared gate without touching that gate", async () => {
+    it("moves a pending child review onto a prepared delivery gate without touching that gate", async () => {
       const fixture = await seedDelivery();
       const response = await request(createApp())
         .post(`/api/issues/${fixture.sourceId}/review-transfers`)
