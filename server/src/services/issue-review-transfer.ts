@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import {
   approvals,
   environmentLeases,
@@ -26,6 +26,25 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type DbOrTx = Db | Tx;
 
 export type IssueReviewTransferRow = typeof issueReviewTransfers.$inferSelect;
+
+/** What a reviewer names when approving a stage on a delivery with transfers. */
+export type ExpectedReviewManifest = { revision: string; finalHead: string; finalTree: string };
+
+/**
+ * The destination's complete transfer set, read as one review manifest. The
+ * server checks that the attested receipts agree with each other; it does not
+ * read Git, so the reviewer verifies the pins themselves before approving.
+ */
+export type ReviewManifest = {
+  destinationIssueId: string;
+  revision: string | null;
+  originalBase: string | null;
+  finalHead: string | null;
+  finalTree: string | null;
+  transfers: Array<{ transferId: string; destinationStageId: string; receiptRevision: string | null }>;
+  valid: boolean;
+  problems: string[];
+};
 
 export type ReviewTransferActor = {
   userId: string | null;
@@ -213,6 +232,103 @@ function currentReceipt(row: IssueReviewTransferRow) {
   return row.receipts.length > 0 ? row.receipts[row.receipts.length - 1]! : null;
 }
 
+type ReceiptPins = { destination?: { originalBase?: string; finalHead?: string; finalTree?: string } };
+
+export function buildReviewManifest(destinationIssueId: string, rows: IssueReviewTransferRow[]): ReviewManifest {
+  const ordered = [...rows].sort((a, b) => a.id.localeCompare(b.id));
+  const problems: string[] = [];
+  const revisions = new Set(ordered.map((row) => row.manifestRevision));
+  if (revisions.size > 1) problems.push("transfers disagree on the manifest revision");
+  const pins = { originalBase: new Set<string>(), finalHead: new Set<string>(), finalTree: new Set<string>() };
+  for (const row of ordered) {
+    const receipt = currentReceipt(row) as ReceiptPins | null;
+    if (!receipt) {
+      problems.push(`missing receipts: ${row.id}`);
+      continue;
+    }
+    for (const key of ["originalBase", "finalHead", "finalTree"] as const) {
+      const value = receipt.destination?.[key];
+      if (value) pins[key].add(value);
+    }
+  }
+  const single = (values: Set<string>, label: string) => {
+    if (values.size > 1) problems.push(`transfers disagree on the delivery ${label}`);
+    return values.size === 1 ? [...values][0]! : null;
+  };
+  const originalBase = single(pins.originalBase, "original base");
+  const finalHead = single(pins.finalHead, "final head");
+  const finalTree = single(pins.finalTree, "final tree");
+  return {
+    destinationIssueId,
+    revision: revisions.size === 1 ? [...revisions][0] ?? null : null,
+    originalBase,
+    finalHead,
+    finalTree,
+    transfers: ordered.map((row) => ({
+      transferId: row.id,
+      destinationStageId: row.destinationStageId,
+      receiptRevision: row.receiptRevision,
+    })),
+    valid: problems.length === 0 && ordered.length > 0,
+    problems,
+  };
+}
+
+/**
+ * Locks the destination row, then its transfer rows in id order. Every writer
+ * of the manifest and every bound approval takes the locks in this order, so
+ * a receipt change and an approval cannot interleave.
+ */
+async function lockManifest(tx: Tx, companyId: string, destinationIssueId: string) {
+  await tx
+    .select({ id: issues.id })
+    .from(issues)
+    .where(and(eq(issues.id, destinationIssueId), eq(issues.companyId, companyId)))
+    .for("update");
+  return tx
+    .select()
+    .from(issueReviewTransfers)
+    .where(and(
+      eq(issueReviewTransfers.companyId, companyId),
+      eq(issueReviewTransfers.destinationIssueId, destinationIssueId),
+    ))
+    .orderBy(asc(issueReviewTransfers.id))
+    .for("update");
+}
+
+async function advanceManifestRevision(tx: Tx, companyId: string, destinationIssueId: string) {
+  const revision = randomUUID();
+  await tx
+    .update(issueReviewTransfers)
+    .set({ manifestRevision: revision })
+    .where(and(
+      eq(issueReviewTransfers.companyId, companyId),
+      eq(issueReviewTransfers.destinationIssueId, destinationIssueId),
+    ));
+  return revision;
+}
+
+/** True once any approval on the destination was bound to its manifest. */
+async function manifestIsFrozen(tx: DbOrTx, companyId: string, destinationIssueId: string) {
+  const [bound] = await tx
+    .select({ id: issueExecutionDecisions.id })
+    .from(issueExecutionDecisions)
+    .where(and(
+      eq(issueExecutionDecisions.companyId, companyId),
+      eq(issueExecutionDecisions.issueId, destinationIssueId),
+      isNotNull(issueExecutionDecisions.reviewManifestBinding),
+    ))
+    .limit(1);
+  return Boolean(bound);
+}
+
+function manifestFrozen(destinationIssueId: string) {
+  return conflict("A review was already approved against this delivery's manifest. Its transfers and receipts can no longer change.", {
+    code: "review_transfer_manifest_frozen",
+    destinationIssueId,
+  });
+}
+
 export function issueReviewTransferService(db: Db) {
   async function findReplay(tx: DbOrTx, input: RequestReviewTransferInput) {
     const [existing] = await tx
@@ -275,6 +391,7 @@ export function issueReviewTransferService(db: Db) {
       if (destination.status === "done" || destination.status === "cancelled") {
         throw unprocessable("The destination delivery is closed.", { code: "review_transfer_invalid_destination" });
       }
+      if (await manifestIsFrozen(tx, input.companyId, destination.id)) throw manifestFrozen(destination.id);
 
       const sourcePolicy = normalizeIssueExecutionPolicy(source.executionPolicy ?? null);
       const sourceStage = policyStages(sourcePolicy).find((stage) => stage.id === input.sourceStageId);
@@ -403,6 +520,7 @@ export function issueReviewTransferService(db: Db) {
           createdByRunId: actor.runId,
         })
         .returning();
+      const manifestRevision = await advanceManifestRevision(tx, input.companyId, destination.id);
 
       const details = {
         transferId: row!.id,
@@ -412,6 +530,7 @@ export function issueReviewTransferService(db: Db) {
         destinationStageId: mappedStage.id,
         removedBlocksIssueId: removedEdge?.blockedId ?? null,
         reason: input.reason,
+        manifestRevision,
       };
       for (const entityId of [source.id, destination.id, ...(removedEdge ? [removedEdge.blockedId] : [])]) {
         await logActivity(tx as unknown as Db, {
@@ -426,7 +545,7 @@ export function issueReviewTransferService(db: Db) {
           details,
         });
       }
-      return { transfer: row!, replayed: false };
+      return { transfer: { ...row!, manifestRevision }, replayed: false };
     });
   }
 
@@ -438,19 +557,23 @@ export function issueReviewTransferService(db: Db) {
         eq(issueReviewTransfers.companyId, companyId),
         or(eq(issueReviewTransfers.sourceIssueId, issueId), eq(issueReviewTransfers.destinationIssueId, issueId)),
       ));
+    const incoming = rows.filter((row) => row.destinationIssueId === issueId);
     return {
       outgoing: rows.filter((row) => row.sourceIssueId === issueId),
-      incoming: rows.filter((row) => row.destinationIssueId === issueId),
+      incoming,
+      manifest: incoming.length > 0 ? buildReviewManifest(issueId, incoming) : null,
     };
   }
 
   async function attachReceipts(input: AttachReviewTransferReceiptsInput, actor: ReviewTransferActor) {
     return db.transaction(async (tx) => {
-      const [row] = await tx
-        .select()
+      const [target] = await tx
+        .select({ destinationIssueId: issueReviewTransfers.destinationIssueId })
         .from(issueReviewTransfers)
-        .where(and(eq(issueReviewTransfers.id, input.transferId), eq(issueReviewTransfers.companyId, input.companyId)))
-        .for("update");
+        .where(and(eq(issueReviewTransfers.id, input.transferId), eq(issueReviewTransfers.companyId, input.companyId)));
+      if (!target) throw notFound("Review transfer not found");
+      const manifestRows = await lockManifest(tx, input.companyId, target.destinationIssueId);
+      const row = manifestRows.find((candidate) => candidate.id === input.transferId);
       if (!row) throw notFound("Review transfer not found");
       const { idempotencyKey, expectedReceiptRevision: _expected, companyId: _company, transferId: _transfer, ...evidence } = input;
       const evidenceFingerprint = createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
@@ -463,6 +586,7 @@ export function issueReviewTransferService(db: Db) {
         }
         return { transfer: row, replayed: true };
       }
+      if (await manifestIsFrozen(tx, input.companyId, row.destinationIssueId)) throw manifestFrozen(row.destinationIssueId);
       if (row.receiptRevision !== input.expectedReceiptRevision) {
         throw conflict("The transfer receipts changed since they were read. Read them again and resend.", {
           code: "review_transfer_receipts_stale",
@@ -492,6 +616,7 @@ export function issueReviewTransferService(db: Db) {
         .set({ receipts: [...row.receipts, receipt], receiptRevision: revision, updatedAt: new Date() })
         .where(eq(issueReviewTransfers.id, row.id))
         .returning();
+      const manifestRevision = await advanceManifestRevision(tx, row.companyId, row.destinationIssueId);
       for (const entityId of [row.sourceIssueId, row.destinationIssueId]) {
         await logActivity(tx as unknown as Db, {
           companyId: row.companyId,
@@ -502,10 +627,16 @@ export function issueReviewTransferService(db: Db) {
           action: "issue.review_transfer_receipts_attached",
           entityType: "issue",
           entityId,
-          details: { transferId: row.id, receiptRevision: revision, finalHead: input.destination.finalHead, finalTree: input.destination.finalTree },
+          details: {
+            transferId: row.id,
+            receiptRevision: revision,
+            manifestRevision,
+            finalHead: input.destination.finalHead,
+            finalTree: input.destination.finalTree,
+          },
         });
       }
-      return { transfer: updated!, replayed: false };
+      return { transfer: { ...updated!, manifestRevision }, replayed: false };
     });
   }
 
@@ -540,15 +671,21 @@ async function transfersTouching(tx: DbOrTx, companyId: string, issueId: string)
 
 /**
  * Called inside the transaction that records a native review decision. A held
- * source stage may not be decided at all; a transferred destination stage, and
- * the delivery stages after it, may not be approved until the transfer has a
- * complete receipt set. An approval of the mapped stage marks the transfer
- * satisfied.
+ * source stage may not be decided at all. On a delivery with transfers, any
+ * approval needs a complete, consistent receipt set and must name the exact
+ * manifest it was reviewed against; the returned binding is stored on the
+ * decision row. An approval of the mapped stage marks the transfer satisfied.
  */
 export async function assertReviewEligible(
-  tx: DbOrTx,
-  input: { companyId: string; issueId: string; stageId: string; outcome: string },
-) {
+  tx: Tx,
+  input: {
+    companyId: string;
+    issueId: string;
+    stageId: string;
+    outcome: string;
+    expectedReviewManifest?: ExpectedReviewManifest | null;
+  },
+): Promise<Record<string, unknown> | null> {
   const rows = await transfersTouching(tx, input.companyId, input.issueId);
   const heldSource = rows.find((row) => row.sourceIssueId === input.issueId && row.sourceStageId === input.stageId);
   if (heldSource) {
@@ -558,24 +695,58 @@ export async function assertReviewEligible(
       destinationIssueId: heldSource.destinationIssueId,
     });
   }
-  if (input.outcome !== "approved") return;
-  const unproven = rows.find((row) => row.destinationIssueId === input.issueId && currentReceipt(row) === null);
+  if (input.outcome !== "approved") return null;
+  if (!rows.some((row) => row.destinationIssueId === input.issueId)) return null;
+  // Re-read the manifest under its locks: a concurrent receipt change either
+  // committed already and moved the revision, or waits for this decision.
+  const manifestRows = await lockManifest(tx, input.companyId, input.issueId);
+  const unproven = manifestRows.find((row) => currentReceipt(row) === null);
   if (unproven) {
     throw conflict("A transferred review cannot be approved until its receipts are attached.", {
       code: "review_transfer_receipts_missing",
       transferId: unproven.id,
     });
   }
+  const manifest = buildReviewManifest(input.issueId, manifestRows);
+  if (!manifest.valid) {
+    throw conflict("The delivery's transfer receipts do not agree, so no review can be approved against them.", {
+      code: "review_manifest_invalid",
+      problems: manifest.problems,
+    });
+  }
+  const expected = input.expectedReviewManifest;
+  if (!expected) {
+    throw unprocessable("Approving a delivery with transferred reviews requires expectedReviewManifest. Read GET /issues/:id/review-transfers and send its manifest revision, finalHead and finalTree.", {
+      code: "review_manifest_binding_required",
+      manifest,
+    });
+  }
+  if (expected.revision !== manifest.revision || expected.finalHead !== manifest.finalHead
+    || expected.finalTree !== manifest.finalTree) {
+    throw conflict("The delivery's review manifest changed since it was read. Review the current manifest and approve again.", {
+      code: "review_manifest_stale",
+      expected,
+      manifest,
+    });
+  }
   // Approving the mapped stage settles the moved obligation in the same
   // transaction as the decision. The source may then close; its reviewer
   // stays undispatched there, because the review was decided elsewhere.
-  const decided = rows.find((row) => row.destinationIssueId === input.issueId && row.destinationStageId === input.stageId);
+  const decided = manifestRows.find((row) => row.destinationStageId === input.stageId);
   if (decided && decided.status === "held") {
     await tx
       .update(issueReviewTransfers)
       .set({ status: "satisfied", updatedAt: new Date() })
       .where(eq(issueReviewTransfers.id, decided.id));
   }
+  return {
+    destinationIssueId: manifest.destinationIssueId,
+    revision: manifest.revision,
+    originalBase: manifest.originalBase,
+    finalHead: manifest.finalHead,
+    finalTree: manifest.finalTree,
+    transfers: manifest.transfers,
+  };
 }
 
 /**
@@ -622,9 +793,28 @@ export async function assertIssueUpdateKeepsTransfers(
         transferId: unproven.id,
       });
     }
+    // A board override clears the review state; it must not also skip a moved
+    // obligation that no native decision has settled yet.
+    const undecided = rows.find((row) => row.status === "held");
+    if (undecided) {
+      throw conflict("A delivery cannot close until each transferred review is approved on it.", {
+        code: "review_transfer_undecided",
+        transferId: undecided.id,
+      });
+    }
   }
   if (input.nextExecutionPolicy !== undefined) {
     const nextPolicy = normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
+    if (await manifestIsFrozen(tx, input.companyId, input.issueId)) {
+      const [current] = await tx
+        .select({ executionPolicy: issues.executionPolicy })
+        .from(issues)
+        .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)));
+      const currentPolicy = normalizeIssueExecutionPolicy(current?.executionPolicy ?? null);
+      if (JSON.stringify(policyStages(currentPolicy)) !== JSON.stringify(policyStages(nextPolicy))) {
+        throw manifestFrozen(input.issueId);
+      }
+    }
     for (const row of rows) {
       const mapped = nextPolicy?.stages.find((stage) => stage.id === row.destinationStageId);
       const participants = (row.obligation.participants as Array<{ type: string; agentId: string | null; userId: string | null }>) ?? [];

@@ -579,6 +579,12 @@ export const attachIssueReviewTransferReceiptsSchema = z
 
 export type AttachIssueReviewTransferReceipts = z.infer<typeof attachIssueReviewTransferReceiptsSchema>;
 
+export const expectedReviewManifestSchema = z
+  .object({ revision: z.string().guid(), finalHead: gitObjectIdSchema, finalTree: gitObjectIdSchema })
+  .strict();
+
+export type ExpectedReviewManifest = z.infer<typeof expectedReviewManifestSchema>;
+
 export const issueRecoveryActionReadModelSchema = z.object({
   id: z.string().guid(),
   companyId: z.string().guid(),
@@ -984,6 +990,11 @@ export const updateIssueSchema = objectWithoutDefaults(
     expectedStatusVersion: z.number().int().nonnegative().optional(),
     /** Reject a policy write if the policy changed after the caller read it. */
     expectedExecutionPolicy: z.record(z.string(), z.unknown()).optional().nullable(),
+    /**
+     * Required to approve a stage on a delivery with transferred reviews: the
+     * exact manifest from GET /issues/:id/review-transfers that was reviewed.
+     */
+    expectedReviewManifest: expectedReviewManifestSchema.optional(),
     requestDepth: issueRequestDepthInputSchema.optional(),
     assigneeAgentId: z.string().trim().min(1).optional().nullable(),
     comment: multilineTextSchema.pipe(z.string().min(1)).optional(),

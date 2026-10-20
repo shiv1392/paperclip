@@ -301,6 +301,19 @@ describe("issue execution policy routes", () => {
     expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { revision: "not-a-uuid", finalHead: "a".repeat(40), finalTree: "b".repeat(40) },
+    { revision: "11111111-1111-4111-8111-111111111111", finalHead: "HEAD", finalTree: "b".repeat(40) },
+    { revision: "11111111-1111-4111-8111-111111111111", finalHead: "a".repeat(40) },
+  ])("rejects a malformed review manifest binding before reading the task: %j", async (expectedReviewManifest) => {
+    const res = await request(await createApp({ type: "board", source: "local_implicit", userId: "local-board" }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "done", comment: "Approved.", expectedReviewManifest });
+    expect(res.status).toBe(400);
+    expect(mockIssueService.getById).not.toHaveBeenCalled();
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   it("rejects a stale status version before changing or waking a task", async () => {
     const issue = {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", companyId: "company-1",

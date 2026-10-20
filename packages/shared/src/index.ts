@@ -1952,6 +1952,8 @@ export {
   type RequestIssueReviewTransfer,
   attachIssueReviewTransferReceiptsSchema,
   type AttachIssueReviewTransferReceipts,
+  expectedReviewManifestSchema,
+  type ExpectedReviewManifest,
   issueExecutionMonitorPolicySchema,
   issueExecutionStateSchema,
   resolveIssueRecoveryActionSchema,
