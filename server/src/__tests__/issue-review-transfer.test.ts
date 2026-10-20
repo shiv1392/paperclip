@@ -718,4 +718,94 @@ describeEmbeddedPostgres("issue review transfers", () => {
       expect(await runsFor(fixture.builderId, fixture.sourceId)).toHaveLength(1);
     });
   });
+  describe("migration map", () => {
+    it("maps the pending child and the final-suite child to distinct delivery stages ahead of its own gate, with the suite evidence attached later", async () => {
+      const fixture = await seedDelivery();
+      // The final-suite child has a configured review that has not started.
+      const suiteStage = reviewStage(fixture.reviewerId);
+      await db.update(issues).set({
+        executionPolicy: { mode: "normal", commentRequired: true, stages: [suiteStage] },
+      }).where(eq(issues.id, fixture.suiteId));
+      const first = await request(createApp())
+        .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture))
+        .expect(201);
+      const [suite] = await db.select().from(issues).where(eq(issues.id, fixture.suiteId));
+      const [parentAfterFirst] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      const second = await request(createApp())
+        .post(`/api/issues/${fixture.suiteId}/review-transfers`)
+        .send({
+          idempotencyKey: `transfer:${fixture.suiteId}:${suiteStage.id}`,
+          sourceStageId: suiteStage.id,
+          destinationIssueId: fixture.parentId,
+          expectedSourceUpdatedAt: suite!.updatedAt.toISOString(),
+          expectedDestinationUpdatedAt: parentAfterFirst!.updatedAt.toISOString(),
+          removeBlocksIssueId: null,
+          reason: "Move the not-started final-suite review to the delivery.",
+          requiredReceipts: { commands: ["pnpm test:run"] },
+        })
+        .expect(201);
+      expect(second.body.transfer.obligation.sourceStateStatus).toBe("none");
+
+      const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      const stageIds = (parent!.executionPolicy as { stages: Array<{ id: string }> }).stages.map((stage) => stage.id);
+      expect(stageIds).toEqual([
+        second.body.transfer.destinationStageId,
+        first.body.transfer.destinationStageId,
+        fixture.parentGate.id,
+      ]);
+      expect(new Set(stageIds).size).toBe(3);
+      // Only the circular pending-child -> suite-child edge is gone, so the suite child can run
+      // its suite; its real dependency on the delivery remains.
+      const edges = await db.select().from(issueRelations).where(eq(issueRelations.companyId, fixture.companyId));
+      expect(edges.map((edge) => [edge.issueId, edge.relatedIssueId])).toEqual([[fixture.suiteId, fixture.parentId]]);
+    });
+
+    it("carries a child's changes-requested history to its delivery without approving it", async () => {
+      const fixture = await seedDelivery();
+      const decisionId = randomUUID();
+      await db.insert(issueExecutionDecisions).values({
+        id: decisionId, companyId: fixture.companyId, issueId: fixture.sourceId, stageId: fixture.sourceStage.id,
+        stageType: "review", actorAgentId: fixture.reviewerId, outcome: "changes_requested", body: "Fix the changelog.",
+      });
+      const changesRequested = {
+        ...(fixture.source.executionState as Record<string, unknown>),
+        status: "changes_requested", lastDecisionId: decisionId, lastDecisionOutcome: "changes_requested", changesRequestedCount: 1,
+      };
+      await db.update(issues).set({ status: "in_progress", assigneeAgentId: fixture.builderId, executionState: changesRequested })
+        .where(eq(issues.id, fixture.sourceId));
+      const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      const response = await request(createApp())
+        .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture, { expectedSourceUpdatedAt: source!.updatedAt.toISOString(), removeBlocksIssueId: null }))
+        .expect(201);
+      expect(response.body.transfer.obligation).toMatchObject({
+        sourceStateStatus: "changes_requested",
+        decisionIds: [decisionId],
+        decisionOutcomes: ["changes_requested"],
+        changesRequestedCount: 1,
+        returnAssignee: { type: "agent", agentId: fixture.builderId },
+      });
+      const decisions = await db.select().from(issueExecutionDecisions);
+      expect(decisions.map((decision) => [decision.issueId, decision.outcome])).toEqual([[fixture.sourceId, "changes_requested"]]);
+      const [after] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(after!.executionState).toEqual(changesRequested);
+    });
+
+    it("moves a pending child review onto a prepared delivery gate without touching that gate", async () => {
+      const fixture = await seedDelivery();
+      const response = await request(createApp())
+        .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture, { removeBlocksIssueId: null }))
+        .expect(201);
+      const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      const stages = (parent!.executionPolicy as { stages: unknown[] }).stages;
+      expect(stages[1]).toEqual(fixture.parentGate);
+      expect(parent!.status).toBe("blocked");
+      expect(parent!.executionState).toBeNull();
+      expect(response.body.transfer.obligation.sourceStateStatus).toBe("pending");
+      // The scheduling edge was not named, so it stays.
+      expect(await db.select().from(issueRelations).where(eq(issueRelations.companyId, fixture.companyId))).toHaveLength(2);
+    });
+  });
 });
