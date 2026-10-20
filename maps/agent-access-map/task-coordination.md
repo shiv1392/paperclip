@@ -71,12 +71,16 @@ API: `present` — representative operation IDs:
 
 - `PATCH /api/issues/{id}`.
 - `POST /api/issues/{id}/interactions`.
+- `POST /api/issues/{id}/review-transfers`, `POST /api/review-transfers/{transferId}/receipts`,
+  `GET /api/issues/{id}/review-transfers`.
 
 Agent access: `partial` — Native paperclip_finish/paperclip_block and assigned
-resolve_review; legacy agent REST disposition.
+resolve_review; legacy agent REST disposition. Review transfer and receipts are
+`operator-only`; agents can read transfers on tasks they can read.
 
 Policy: Task visibility/mutation, task-assignment and ownership policy; review audience
-independent; tree controls board-only.
+independent; tree controls board-only. Review transfer requires a board actor with
+company access and `issue:mutate` on the source and the delivery, checked separately.
 
 Evidence: `source-only` —
 [implementation](../../server/src/routes/issue-tree-control.ts#L95) at the reviewed
@@ -88,7 +92,7 @@ Assert the relevant denied actor, owner, company or mode from Policy. Review the
 remaining operations before qualifying the whole capability.
 
 Gaps: Review policy determines final completion; formal board approval is a different
-boundary.
+boundary. Transferred-review receipts are attested by the board, not read from Git.
 
 ## `tree-control`
 
