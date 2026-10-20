@@ -14,6 +14,7 @@ import {
 } from "@paperclipai/db";
 import type {
   AttachIssueReviewTransferReceipts,
+  ExpectedReviewManifest,
   IssueExecutionPolicy,
   IssueExecutionStage,
   RequestIssueReviewTransfer,
@@ -27,9 +28,6 @@ type DbOrTx = Db | Tx;
 
 export type IssueReviewTransferRow = typeof issueReviewTransfers.$inferSelect;
 
-/** What a reviewer names when approving a stage on a delivery with transfers. */
-export type ExpectedReviewManifest = { revision: string; finalHead: string; finalTree: string };
-
 /**
  * The destination's complete transfer set, read as one review manifest. The
  * server checks that the attested receipts agree with each other; it does not
@@ -41,7 +39,13 @@ export type ReviewManifest = {
   originalBase: string | null;
   finalHead: string | null;
   finalTree: string | null;
-  transfers: Array<{ transferId: string; destinationStageId: string; receiptRevision: string | null }>;
+  transfers: Array<{
+    transferId: string;
+    destinationStageId: string;
+    receiptRevision: string | null;
+    sourceCommit: string | null;
+    sourceTree: string | null;
+  }>;
   valid: boolean;
   problems: string[];
 };
@@ -232,7 +236,10 @@ function currentReceipt(row: IssueReviewTransferRow) {
   return row.receipts.length > 0 ? row.receipts[row.receipts.length - 1]! : null;
 }
 
-type ReceiptPins = { destination?: { originalBase?: string; finalHead?: string; finalTree?: string } };
+type ReceiptPins = {
+  source?: { commit?: string; tree?: string };
+  destination?: { originalBase?: string; finalHead?: string; finalTree?: string };
+};
 
 export function buildReviewManifest(destinationIssueId: string, rows: IssueReviewTransferRow[]): ReviewManifest {
   const ordered = [...rows].sort((a, b) => a.id.localeCompare(b.id));
@@ -264,11 +271,16 @@ export function buildReviewManifest(destinationIssueId: string, rows: IssueRevie
     originalBase,
     finalHead,
     finalTree,
-    transfers: ordered.map((row) => ({
-      transferId: row.id,
-      destinationStageId: row.destinationStageId,
-      receiptRevision: row.receiptRevision,
-    })),
+    transfers: ordered.map((row) => {
+      const source = (currentReceipt(row) as ReceiptPins | null)?.source;
+      return {
+        transferId: row.id,
+        destinationStageId: row.destinationStageId,
+        receiptRevision: row.receiptRevision,
+        sourceCommit: source?.commit ?? null,
+        sourceTree: source?.tree ?? null,
+      };
+    }),
     valid: problems.length === 0 && ordered.length > 0,
     problems,
   };
@@ -308,8 +320,22 @@ async function advanceManifestRevision(tx: Tx, companyId: string, destinationIss
   return revision;
 }
 
-/** True once any approval on the destination was bound to its manifest. */
+/**
+ * True once any approval on the destination was bound to its manifest. A
+ * settled transfer also freezes it: decision rows can be deleted with their
+ * agent, but the settled status stays.
+ */
 async function manifestIsFrozen(tx: DbOrTx, companyId: string, destinationIssueId: string) {
+  const [settled] = await tx
+    .select({ id: issueReviewTransfers.id })
+    .from(issueReviewTransfers)
+    .where(and(
+      eq(issueReviewTransfers.companyId, companyId),
+      eq(issueReviewTransfers.destinationIssueId, destinationIssueId),
+      eq(issueReviewTransfers.status, "satisfied"),
+    ))
+    .limit(1);
+  if (settled) return true;
   const [bound] = await tx
     .select({ id: issueExecutionDecisions.id })
     .from(issueExecutionDecisions)
@@ -716,7 +742,7 @@ export async function assertReviewEligible(
   }
   const expected = input.expectedReviewManifest;
   if (!expected) {
-    throw unprocessable("Approving a delivery with transferred reviews requires expectedReviewManifest. Read GET /issues/:id/review-transfers and send its manifest revision, finalHead and finalTree.", {
+    throw unprocessable("Approving a delivery with transferred reviews requires expectedReviewManifest, which only PATCH /issues/:id accepts. Read GET /issues/:id/review-transfers and send its manifest revision, finalHead and finalTree.", {
       code: "review_manifest_binding_required",
       manifest,
     });

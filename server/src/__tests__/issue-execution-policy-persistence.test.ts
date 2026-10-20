@@ -82,7 +82,7 @@ const support = await getEmbeddedPostgresTestSupport();
           childIssueIds: [sourceId],
         },
       },
-      receipts: [{ revision: receiptRevision, idempotencyKey: "r:1", destination: { originalBase: sha("base"), finalHead: sha("final-head"), finalTree: tree } }],
+      receipts: [{ revision: receiptRevision, idempotencyKey: "r:1", source: { commit: sha("commit"), tree: sha("tree") }, destination: { originalBase: sha("base"), finalHead: sha("final-head"), finalTree: tree } }],
       receiptRevision,
       manifestRevision,
     }).returning();
@@ -159,7 +159,10 @@ const support = await getEmbeddedPostgresTestSupport();
       originalBase: sha("base"),
       finalHead: sha("final-head"),
       finalTree: sha("final-tree"),
-      transfers: [{ transferId: fixture.transfer.id, destinationStageId: fixture.destinationStageId, receiptRevision: fixture.receiptRevision }],
+      transfers: [{
+        transferId: fixture.transfer.id, destinationStageId: fixture.destinationStageId, receiptRevision: fixture.receiptRevision,
+        sourceCommit: sha("commit"), sourceTree: sha("tree"),
+      }],
     });
     const [row] = await db.select().from(issueReviewTransfers).where(eq(issueReviewTransfers.id, fixture.transfer.id));
     expect(row!.receipts).toHaveLength(1);

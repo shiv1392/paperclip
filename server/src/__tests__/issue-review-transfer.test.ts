@@ -9,6 +9,7 @@ import {
   environmentLeases,
   environments,
   issueApprovals,
+  issueComments,
   agentRuntimeState,
   agentWakeupRequests,
   agents,
@@ -702,7 +703,8 @@ describeEmbeddedPostgres("issue review transfers", () => {
       const manifest = await readManifest(fixture.parentId);
       expect(manifest).toMatchObject({
         originalBase: sha("base"), finalHead: sha("final-head"), finalTree: sha("final-tree"),
-        transfers: [{ transferId: transfer.id, receiptRevision }], valid: true, problems: [],
+        transfers: [{ transferId: transfer.id, receiptRevision, sourceCommit: sha("source-commit"), sourceTree: sha("source-tree") }],
+        valid: true, problems: [],
       });
       expect(manifest.revision).toEqual(expect.any(String));
       const sourceRead = await request(createApp()).get(`/api/issues/${fixture.sourceId}/review-transfers`).expect(200);
@@ -719,6 +721,20 @@ describeEmbeddedPostgres("issue review transfers", () => {
       expect(await db.select().from(issueExecutionDecisions)).toHaveLength(0);
       const [transfer] = await db.select().from(issueReviewTransfers);
       expect(transfer!.status).toBe("held");
+    });
+
+    it("fails a review-approval comment closed, keeps no comment and names the PATCH path", async () => {
+      const { fixture } = await seedWithReceipts();
+      const commentsBefore = await db.select().from(issueComments).where(eq(issueComments.issueId, fixture.parentId));
+      const response = await request(createApp(boardReviewer))
+        .post(`/api/issues/${fixture.parentId}/comments`)
+        .send({ body: "## Review: APPROVED" })
+        .expect(422);
+      expect(errorCode(response)).toBe("review_manifest_binding_required");
+      expect(response.body.error).toContain("PATCH /issues/:id");
+      expect(await db.select().from(issueExecutionDecisions)).toHaveLength(0);
+      expect(await db.select().from(issueComments).where(eq(issueComments.issueId, fixture.parentId)))
+        .toHaveLength(commentsBefore.length);
     });
 
     it.each([
@@ -763,7 +779,10 @@ describeEmbeddedPostgres("issue review transfers", () => {
         originalBase: sha("base"),
         finalHead: sha("final-head"),
         finalTree: sha("final-tree"),
-        transfers: [{ transferId: transfer.id, destinationStageId: transfer.destinationStageId, receiptRevision }],
+        transfers: [{
+          transferId: transfer.id, destinationStageId: transfer.destinationStageId, receiptRevision,
+          sourceCommit: sha("source-commit"), sourceTree: sha("source-tree"),
+        }],
       };
       expect(decisions.map((decision) => [decision.stageId, decision.outcome, decision.reviewManifestBinding]).sort())
         .toEqual([
@@ -885,6 +904,17 @@ describeEmbeddedPostgres("issue review transfers", () => {
         expect(row!.receipts).toHaveLength(1);
         expect(row!.receiptRevision).toBe(receiptRevision);
         expect(await db.select().from(issueExecutionDecisions)).toEqual(decisionsBefore);
+      });
+
+      it("stays frozen after the bound decision rows are removed", async () => {
+        const { fixture, transfer, receiptRevision } = await frozenAfter(1);
+        // Agent deletion removes that agent's decision rows; the freeze must not depend on them.
+        await db.delete(issueExecutionDecisions);
+        const response = await request(createApp())
+          .post(`/api/review-transfers/${transfer.id}/receipts`)
+          .send(receiptBody(fixture, { idempotencyKey: "receipts:after-delete", expectedReceiptRevision: receiptRevision }))
+          .expect(409);
+        expect(errorCode(response)).toBe("review_transfer_manifest_frozen");
       });
 
       it("still returns the original receipt for an identical replay after approval", async () => {
