@@ -5,6 +5,10 @@ import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  approvals,
+  environmentLeases,
+  environments,
+  issueApprovals,
   agentRuntimeState,
   agentWakeupRequests,
   agents,
@@ -27,8 +31,12 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { issueReviewTransferRoutes } from "../routes/issue-review-transfers.js";
+import { findReviewTransferHold } from "../services/issue-review-transfer.js";
 import { issueRoutes } from "../routes/issues.js";
 import { heartbeatService } from "../services/heartbeat.js";
+import { issueService } from "../services/issues.js";
+import { getExecutionBlocker } from "../services/execution-blocker.js";
+import { legacyExecutionNeedsReconciliationWithEvidence } from "../services/legacy-execution-recovery.js";
 import { createPostgresRunDispatchAdapter } from "../modules/run-dispatch/adapters/postgres.js";
 import { createPostgresWakeQueueAdapter } from "../modules/wake-queue/adapters/postgres.js";
 import { createReleaseIssueExecution } from "../modules/wake-queue/application/use-cases.js";
@@ -58,6 +66,10 @@ describeEmbeddedPostgres("issue review transfers", () => {
       previous = count;
     }
     await db.delete(issueReviewTransfers);
+    await db.delete(issueApprovals);
+    await db.delete(approvals);
+    await db.delete(environmentLeases);
+    await db.delete(environments);
     await db.delete(issueThreadInteractions);
     await db.delete(heartbeatRunEvents);
     await db.execute(sql`update heartbeat_runs set retry_of_run_id = null`);
@@ -78,6 +90,8 @@ describeEmbeddedPostgres("issue review transfers", () => {
   afterAll(async () => {
     await tempDb?.cleanup();
   });
+
+  const sha = (seed: string) => createHash("sha1").update(seed).digest("hex");
 
   function createApp(actor: any = board) {
     const app = express();
@@ -176,7 +190,13 @@ describeEmbeddedPostgres("issue review transfers", () => {
       expectedDestinationUpdatedAt: fixture.parent.updatedAt.toISOString(),
       removeBlocksIssueId: fixture.suiteId,
       reason: "Move child review to the whole-delivery gate.",
-      requiredReceipts: { commands: ["pnpm test:run"] },
+      requiredReceipts: {
+        commands: ["pnpm test:run"],
+        originalBase: sha("base"),
+        sourceCommit: sha("source-commit"),
+        sourceTree: sha("source-tree"),
+        childIssueIds: [fixture.sourceId],
+      },
       ...overrides,
     };
   }
@@ -218,7 +238,10 @@ describeEmbeddedPostgres("issue review transfers", () => {
         returnAssignee: { type: "agent", agentId: fixture.builderId },
         sourceStateStatus: "pending",
         decisionIds: [],
-        requiredReceipts: { commands: ["pnpm test:run"] },
+        requiredReceipts: {
+          commands: ["pnpm test:run"], originalBase: sha("base"), sourceCommit: sha("source-commit"),
+          sourceTree: sha("source-tree"), childIssueIds: [fixture.sourceId],
+        },
       },
     });
 
@@ -250,7 +273,8 @@ describeEmbeddedPostgres("issue review transfers", () => {
       eq(activityLog.companyId, fixture.companyId),
       eq(activityLog.action, "issue.review_transferred"),
     ));
-    expect(audit).toHaveLength(2);
+    // Source, delivery, and the sibling whose blocker was removed.
+    expect(audit.map((entry) => entry.entityId).sort()).toEqual([fixture.sourceId, fixture.parentId, fixture.suiteId].sort());
   });
   it("rejects agents and leaves every record unchanged", async () => {
     const fixture = await seedDelivery();
@@ -330,6 +354,71 @@ describeEmbeddedPostgres("issue review transfers", () => {
     await expectNothingChanged(fixture);
   });
 
+  it("rejects stale destination evidence", async () => {
+    const fixture = await seedDelivery();
+    const response = await request(createApp())
+      .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+      .send(transferBody(fixture, { expectedDestinationUpdatedAt: new Date(0).toISOString() }))
+      .expect(409);
+    expect(errorCode(response)).toBe("review_transfer_stale");
+    await expectNothingChanged(fixture);
+  });
+
+  it("rejects while the source holds an active environment lease", async () => {
+    const fixture = await seedDelivery();
+    const [environment] = await db.insert(environments).values({
+      companyId: fixture.companyId, name: "Lease env", driver: "local", config: {},
+    } as any).returning();
+    await db.insert(environmentLeases).values({
+      companyId: fixture.companyId, environmentId: environment!.id, issueId: fixture.sourceId, status: "active",
+    } as any);
+    const response = await request(createApp())
+      .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+      .send(transferBody(fixture))
+      .expect(409);
+    expect(errorCode(response)).toBe("review_transfer_lease_active");
+    await expectNothingChanged(fixture);
+  });
+
+  it("rejects while the source has a pending board approval", async () => {
+    const fixture = await seedDelivery();
+    const [approval] = await db.insert(approvals).values({
+      companyId: fixture.companyId, type: "request_board_approval", status: "pending", payload: {},
+    } as any).returning();
+    await db.insert(issueApprovals).values({ companyId: fixture.companyId, issueId: fixture.sourceId, approvalId: approval!.id });
+    const response = await request(createApp())
+      .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+      .send(transferBody(fixture))
+      .expect(409);
+    expect(errorCode(response)).toBe("review_transfer_human_control_pending");
+    await expectNothingChanged(fixture);
+  });
+
+  it("checks access to the destination separately from the source", async () => {
+    const fixture = await seedDelivery();
+    const otherCompanyId = randomUUID();
+    await db.insert(companies).values({ id: otherCompanyId, name: "Other", issuePrefix: `OT${otherCompanyId.slice(0, 4)}` });
+    const foreignDeliveryId = randomUUID();
+    await db.insert(issues).values({ id: foreignDeliveryId, companyId: otherCompanyId, title: "Foreign delivery", status: "blocked" });
+    const scopedBoard = { type: "board", source: "session", userId: "scoped", companyIds: [fixture.companyId], isInstanceAdmin: false };
+    await request(createApp(scopedBoard))
+      .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+      .send(transferBody(fixture, { destinationIssueId: foreignDeliveryId }))
+      .expect(404);
+    await expectNothingChanged(fixture);
+  });
+
+  it("treats an omitted and a null edge as the same replay", async () => {
+    const fixture = await seedDelivery();
+    const { removeBlocksIssueId: _edge, ...withoutEdge } = transferBody(fixture, { removeBlocksIssueId: null });
+    const first = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(withoutEdge).expect(201);
+    const replay = await request(createApp())
+      .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+      .send(transferBody(fixture, { removeBlocksIssueId: null }))
+      .expect(200);
+    expect(replay.body.transfer.id).toBe(first.body.transfer.id);
+  });
+
   it("rolls back and keeps the edge when the named edge does not exist", async () => {
     const fixture = await seedDelivery();
     const response = await request(createApp())
@@ -396,8 +485,6 @@ describeEmbeddedPostgres("issue review transfers", () => {
     const edges = await db.select().from(issueRelations).where(eq(issueRelations.companyId, fixture.companyId));
     expect(edges).toHaveLength(1);
   });
-  const sha = (seed: string) => createHash("sha1").update(seed).digest("hex");
-
   function receiptBody(fixture: Awaited<ReturnType<typeof seedDelivery>>, overrides: Record<string, unknown> = {}) {
     const finalTree = sha("final-tree");
     return {
@@ -460,6 +547,17 @@ describeEmbeddedPostgres("issue review transfers", () => {
     const [afterFirst] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
     expect(afterFirst!.status).toBe("in_review");
     expect((afterFirst!.executionState as { currentStageId: string }).currentStageId).toBe(fixture.parentGate.id);
+
+    // The delivery decided the moved obligation, so the child can now close.
+    const [satisfied] = await db.select().from(issueReviewTransfers).where(eq(issueReviewTransfers.id, transfer.id));
+    expect(satisfied!.status).toBe("satisfied");
+    await request(createApp())
+      .patch(`/api/issues/${fixture.sourceId}`)
+      .send({ status: "cancelled", comment: "Approved on the delivery." })
+      .expect(200);
+    // History stays, and the reviewer is still never dispatched on the child.
+    expect(await findReviewTransferHold(db, { companyId: fixture.companyId, issueId: fixture.sourceId, agentId: "local-board" }))
+      .toBeNull();
   });
 
   it.each([
@@ -468,6 +566,13 @@ describeEmbeddedPostgres("issue review transfers", () => {
     ["a missing required command", (body: any) => ({ ...body, commands: [{ ...body.commands[0], command: "pnpm build" }] })],
     ["a child result not in the final head", (body: any) => ({ ...body, childResults: [{ ...body.childResults[0], includedInFinalHead: false }] })],
     ["the wrong source stage", (body: any) => ({ ...body, source: { ...body.source, stageId: randomUUID() } })],
+    ["a different original base", (body: any) => ({ ...body, destination: { ...body.destination, originalBase: sha("other-base") } })],
+    ["a different source commit", (body: any) => ({
+      ...body,
+      source: { ...body.source, commit: sha("other-commit") },
+      childResults: [{ ...body.childResults[0], commit: sha("other-commit") }],
+    })],
+    ["a different source tree", (body: any) => ({ ...body, source: { ...body.source, tree: sha("other-tree") } })],
   ])("rejects receipts with %s", async (_label, mutate) => {
     const fixture = await seedDelivery();
     const transfer = await transferAndReadParent(fixture);
@@ -608,12 +713,17 @@ describeEmbeddedPostgres("issue review transfers", () => {
       const runId = randomUUID();
       await db.insert(heartbeatRuns).values({
         id: runId, companyId: fixture.companyId, agentId: fixture.reviewerId, invocationSource: "automation",
-        status: "queued", contextSnapshot: { issueId: fixture.sourceId },
+        status: "queued", runtimeMode: "legacy", contextSnapshot: { issueId: fixture.sourceId },
       });
       const adapter = createPostgresRunDispatchAdapter(db);
       expect(await adapter.cancelStaleQueuedRun({
         companyId: fixture.companyId, runId, expectedStatus: "queued", now: new Date(),
       })).toMatchObject({ outcome: "cancelled", errorCode: "issue_review_transferred" });
+      // A held run never started, so the cancel must not ask the board to
+      // reconcile provider actions: that is the deadlock this repair removes.
+      const [cancelled] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+      expect(await legacyExecutionNeedsReconciliationWithEvidence(db, cancelled!)).toBe(false);
+      expect(await getExecutionBlocker(db, fixture.companyId, fixture.sourceId)).toBeNull();
     });
 
     function releaseDrain() {
@@ -698,6 +808,29 @@ describeEmbeddedPostgres("issue review transfers", () => {
       expect(recoveryChildren).toHaveLength(0);
     });
 
+    it("refuses the wake-queue reopen write on a held source", async () => {
+      const { fixture } = await heldFixture();
+      // The exact write the deferred-wake reopen makes.
+      await expect(issueService(db).updateForCompany(fixture.sourceId, fixture.companyId, { status: "todo", executionState: null }))
+        .rejects.toMatchObject({ status: 409, details: { code: "review_transfer_source_held" } });
+      const [heldSource] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(heldSource!.executionState).toEqual(fixture.source.executionState);
+    });
+
+    it("cancels a promoted scheduled retry for the held reviewer at claim time", async () => {
+      const { fixture } = await heldFixture();
+      const runId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: runId, companyId: fixture.companyId, agentId: fixture.reviewerId, invocationSource: "automation",
+        status: "queued", runtimeMode: "legacy", scheduledRetryReason: "provider_overloaded", scheduledRetryAttempt: 1,
+        contextSnapshot: { issueId: fixture.sourceId, wakeReason: "execution_review_requested" },
+      } as any);
+      const adapter = createPostgresRunDispatchAdapter(db);
+      expect(await adapter.cancelStaleQueuedRun({
+        companyId: fixture.companyId, runId, expectedStatus: "queued", now: new Date(),
+      })).toMatchObject({ outcome: "cancelled", errorCode: "issue_review_transferred" });
+    });
+
     it("still admits the executor on the held source", async () => {
       const { fixture } = await heldFixture();
       await db.update(issues).set({ status: "in_progress", assigneeAgentId: fixture.builderId }).where(eq(issues.id, fixture.sourceId));
@@ -742,10 +875,22 @@ describeEmbeddedPostgres("issue review transfers", () => {
           expectedDestinationUpdatedAt: parentAfterFirst!.updatedAt.toISOString(),
           removeBlocksIssueId: null,
           reason: "Move the not-started final-suite review to the delivery.",
-          requiredReceipts: { commands: ["pnpm test:run"] },
+          requiredReceipts: {
+            commands: ["pnpm test:run"], originalBase: sha("base"), sourceCommit: sha("suite-commit"),
+            sourceTree: sha("suite-tree"), childIssueIds: [fixture.suiteId, fixture.sourceId],
+          },
         })
         .expect(201);
       expect(second.body.transfer.obligation.sourceStateStatus).toBe("none");
+      // The final-suite obligation needs both child results; the source result alone is refused.
+      const partial = await request(createApp())
+        .post(`/api/review-transfers/${second.body.transfer.id}/receipts`)
+        .send(receiptBody(fixture, {
+          source: { issueId: fixture.suiteId, stageId: suiteStage.id, commit: sha("suite-commit"), tree: sha("suite-tree") },
+          childResults: [{ issueId: fixture.suiteId, commit: sha("suite-commit"), includedInFinalHead: true }],
+        }))
+        .expect(422);
+      expect(partial.body.details.problems).toContain(`missing required child result: ${fixture.sourceId}`);
 
       const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
       const stageIds = (parent!.executionPolicy as { stages: Array<{ id: string }> }).stages.map((stage) => stage.id);
