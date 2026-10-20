@@ -91,8 +91,16 @@ credentials/run context; inspect its result and applicable persistence/attributi
 Assert the relevant denied actor, owner, company or mode from Policy. Review the
 remaining operations before qualifying the whole capability.
 
+Approving any stage on a delivery with transfers needs `expectedReviewManifest`
+(`revision`, `finalHead`, `finalTree`) on `PATCH /api/issues/{id}`, copied from the
+manifest in `GET /api/issues/{id}/review-transfers` that the reviewer inspected. A
+missing binding returns 422; a changed manifest returns 409, and the reviewer re-reads
+and re-reviews before approving again.
+
 Gaps: Review policy determines final completion; formal board approval is a different
-boundary. Transferred-review receipts are attested by the board, not read from Git.
+boundary. Transferred-review receipts are attested by the board, not read from Git. The
+board UI, comments and recovery actions do not send the binding, so they cannot approve a
+delivery with transfers (fail-closed 422).
 
 ## `tree-control`
 
