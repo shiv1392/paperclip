@@ -370,7 +370,7 @@ function buildTransaction(tx: Db, deps: WakeQueuePostgresAdapterDeps, db: Db, ru
           activePauseHold: true,
           treeHoldInteractionWake: false,
           holdId: reviewTransferHold.transferId,
-          rootIssueId: reviewTransferHold.destinationIssueId,
+          rootIssueId: null,
           mode: "review_transfer",
           reason: "This review moved to the delivery.",
           releasePolicy: null,

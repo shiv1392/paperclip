@@ -12,7 +12,12 @@ import {
   issues,
   type Db,
 } from "@paperclipai/db";
-import type { IssueExecutionPolicy, IssueExecutionStage } from "@paperclipai/shared";
+import type {
+  AttachIssueReviewTransferReceipts,
+  IssueExecutionPolicy,
+  IssueExecutionStage,
+  RequestIssueReviewTransfer,
+} from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
@@ -28,36 +33,23 @@ export type ReviewTransferActor = {
   runId: string | null;
 };
 
-export type RequestReviewTransferInput = {
+export type RequestReviewTransferInput = RequestIssueReviewTransfer & {
   companyId: string;
   sourceIssueId: string;
-  sourceStageId: string;
-  destinationIssueId: string;
-  expectedSourceUpdatedAt: string;
-  expectedDestinationUpdatedAt: string;
-  removeBlocksIssueId?: string | null;
-  reason: string;
-  idempotencyKey: string;
-  requiredReceipts: { commands: string[] };
 };
 
-export type AttachReviewTransferReceiptsInput = {
+export type AttachReviewTransferReceiptsInput = AttachIssueReviewTransferReceipts & {
   companyId: string;
   transferId: string;
-  idempotencyKey: string;
-  expectedReceiptRevision: string | null;
-  source: { issueId: string; stageId: string; commit: string; tree: string };
-  destination: { originalBase: string; finalHead: string; finalTree: string };
-  childResults: Array<{ issueId: string; commit: string; includedInFinalHead: boolean }>;
-  commands: Array<{ command: string; exitCode: number; logSha256: string; testedTree: string }>;
 };
 
 const LIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const OUTSTANDING_SOURCE_STATES = new Set(["pending", "changes_requested", "idle", "none"]);
 
 function fingerprint(input: RequestReviewTransferInput) {
-  const { idempotencyKey: _key, ...rest } = input;
-  return createHash("sha256").update(JSON.stringify(rest)).digest("hex");
+  const { idempotencyKey: _key, removeBlocksIssueId, ...rest } = input;
+  // Omitted and null mean the same request, so a replay must match either.
+  return createHash("sha256").update(JSON.stringify({ ...rest, removeBlocksIssueId: removeBlocksIssueId ?? null })).digest("hex");
 }
 
 function policyStages(policy: IssueExecutionPolicy | null) {
@@ -194,12 +186,20 @@ function receiptProblems(row: IssueReviewTransferRow, input: AttachReviewTransfe
   if (input.source.issueId !== row.sourceIssueId || input.source.stageId !== row.sourceStageId) {
     problems.push("source issue or stage does not match the transfer");
   }
-  const child = input.childResults.find((result) => result.issueId === row.sourceIssueId);
-  if (!child) problems.push("missing the source child result");
-  else if (!child.includedInFinalHead) problems.push("the source child result is not in the final head");
-  else if (child.commit !== input.source.commit) problems.push("the child result commit does not match the source commit");
-  const required = (row.obligation.requiredReceipts as { commands?: string[] } | undefined)?.commands ?? [];
-  for (const command of required) {
+  const pins = row.obligation.requiredReceipts as RequestReviewTransferInput["requiredReceipts"];
+  if (input.destination.originalBase !== pins.originalBase) problems.push("original base does not match the pinned base");
+  if (input.source.commit !== pins.sourceCommit) problems.push("source commit does not match the pinned commit");
+  if (input.source.tree !== pins.sourceTree) problems.push("source tree does not match the pinned tree");
+  for (const childIssueId of pins.childIssueIds) {
+    const child = input.childResults.find((result) => result.issueId === childIssueId);
+    if (!child) problems.push(`missing required child result: ${childIssueId}`);
+    else if (!child.includedInFinalHead) problems.push(`child result is not in the final head: ${childIssueId}`);
+  }
+  const sourceResult = input.childResults.find((result) => result.issueId === row.sourceIssueId);
+  if (sourceResult && sourceResult.commit !== pins.sourceCommit) {
+    problems.push("the source child result commit does not match the pinned commit");
+  }
+  for (const command of pins.commands) {
     const result = input.commands.find((candidate) => candidate.command === command);
     if (!result) problems.push(`missing required command: ${command}`);
     else if (result.exitCode !== 0) problems.push(`required command failed: ${command}`);
@@ -253,6 +253,19 @@ export function issueReviewTransferService(db: Db) {
         throw unprocessable("The destination must be the top-level delivery that contains the source task.", {
           code: "review_transfer_invalid_destination",
         });
+      }
+      if (!input.requiredReceipts.childIssueIds.includes(source.id)) {
+        throw unprocessable("The required child results must include the source task.", {
+          code: "review_transfer_children_invalid",
+        });
+      }
+      for (const childIssueId of input.requiredReceipts.childIssueIds) {
+        if (childIssueId !== source.id && !(await isAncestor(tx, input.companyId, destination.id, childIssueId))) {
+          throw unprocessable("Each required child must be part of the destination delivery.", {
+            code: "review_transfer_children_invalid",
+            childIssueId,
+          });
+        }
       }
       assertUnchanged(source, input.expectedSourceUpdatedAt, "source");
       assertUnchanged(destination, input.expectedDestinationUpdatedAt, "destination");
@@ -400,7 +413,7 @@ export function issueReviewTransferService(db: Db) {
         removedBlocksIssueId: removedEdge?.blockedId ?? null,
         reason: input.reason,
       };
-      for (const entityId of [source.id, destination.id]) {
+      for (const entityId of [source.id, destination.id, ...(removedEdge ? [removedEdge.blockedId] : [])]) {
         await logActivity(tx as unknown as Db, {
           companyId: input.companyId,
           actorType: actor.agentId ? "agent" : "user",
@@ -529,7 +542,8 @@ async function transfersTouching(tx: DbOrTx, companyId: string, issueId: string)
  * Called inside the transaction that records a native review decision. A held
  * source stage may not be decided at all; a transferred destination stage, and
  * the delivery stages after it, may not be approved until the transfer has a
- * complete receipt set.
+ * complete receipt set. An approval of the mapped stage marks the transfer
+ * satisfied.
  */
 export async function assertReviewEligible(
   tx: DbOrTx,
@@ -552,6 +566,16 @@ export async function assertReviewEligible(
       transferId: unproven.id,
     });
   }
+  // Approving the mapped stage settles the moved obligation in the same
+  // transaction as the decision. The source may then close; its reviewer
+  // stays undispatched there, because the review was decided elsewhere.
+  const decided = rows.find((row) => row.destinationIssueId === input.issueId && row.destinationStageId === input.stageId);
+  if (decided && decided.status === "held") {
+    await tx
+      .update(issueReviewTransfers)
+      .set({ status: "satisfied", updatedAt: new Date() })
+      .where(eq(issueReviewTransfers.id, decided.id));
+  }
 }
 
 /**
@@ -570,7 +594,7 @@ export async function assertIssueUpdateKeepsTransfers(
   },
 ) {
   const touching = await transfersTouching(tx, input.companyId, input.issueId);
-  const heldSource = touching.find((row) => row.sourceIssueId === input.issueId);
+  const heldSource = touching.find((row) => row.sourceIssueId === input.issueId && row.status === "held");
   if (heldSource) {
     // The source keeps its pending review as audited history; ordinary edits
     // must not close it or erase the stage the transfer points at.

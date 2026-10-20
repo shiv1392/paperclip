@@ -527,6 +527,9 @@ export const issueExecutionStateSchema = z.object({
   changesRequestedCount: z.number().int().nonnegative().optional().default(0),
 });
 
+/** A full SHA-1 or SHA-256 Git object id. */
+const gitObjectIdSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/);
+
 export const requestIssueReviewTransferSchema = z
   .object({
     idempotencyKey: z.string().trim().min(1).max(200),
@@ -537,7 +540,15 @@ export const requestIssueReviewTransferSchema = z
     removeBlocksIssueId: z.string().guid().optional().nullable(),
     reason: z.string().trim().min(1).max(2000),
     requiredReceipts: z
-      .object({ commands: z.array(z.string().trim().min(1).max(500)).min(1).max(20) })
+      .object({
+        commands: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+        /** Delivery base and source implementation pinned at transfer; receipts must match them. */
+        originalBase: gitObjectIdSchema,
+        sourceCommit: gitObjectIdSchema,
+        sourceTree: gitObjectIdSchema,
+        /** Child tasks whose results must be in the final head; must include the source. */
+        childIssueIds: z.array(z.string().guid()).min(1).max(50),
+      })
       .strict(),
   })
   .strict();
@@ -548,10 +559,10 @@ export const attachIssueReviewTransferReceiptsSchema = z
   .object({
     idempotencyKey: z.string().trim().min(1).max(200),
     expectedReceiptRevision: z.string().guid().nullable(),
-    source: z.object({ issueId: z.string().guid(), stageId: z.string().guid(), commit: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/), tree: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/) }).strict(),
-    destination: z.object({ originalBase: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/), finalHead: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/), finalTree: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/) }).strict(),
+    source: z.object({ issueId: z.string().guid(), stageId: z.string().guid(), commit: gitObjectIdSchema, tree: gitObjectIdSchema }).strict(),
+    destination: z.object({ originalBase: gitObjectIdSchema, finalHead: gitObjectIdSchema, finalTree: gitObjectIdSchema }).strict(),
     childResults: z
-      .array(z.object({ issueId: z.string().guid(), commit: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/), includedInFinalHead: z.boolean() }).strict())
+      .array(z.object({ issueId: z.string().guid(), commit: gitObjectIdSchema, includedInFinalHead: z.boolean() }).strict())
       .min(1)
       .max(50),
     commands: z
@@ -559,7 +570,7 @@ export const attachIssueReviewTransferReceiptsSchema = z
         command: z.string().trim().min(1).max(500),
         exitCode: z.number().int(),
         logSha256: z.string().regex(/^[0-9a-f]{64}$/),
-        testedTree: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/),
+        testedTree: gitObjectIdSchema,
       }).strict())
       .min(1)
       .max(20),

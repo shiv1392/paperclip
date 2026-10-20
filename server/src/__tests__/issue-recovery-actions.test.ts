@@ -1912,6 +1912,30 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     return { ...fixture, reviewerId, stageId, runId, action: action!, issue: issue!, executionState, body };
   }
 
+  it.each([
+    ["resolved with blocked replay", { status: "resolved", outcome: "blocked", replay: true }],
+    ["still active without a replay marker", { status: "active", outcome: null, replay: false }],
+  ])("lists the recovery action that the execution blocker cites when it is %s", async (_label, shape) => {
+    const f = await seedBlockedPendingReview();
+    await db.update(issueRecoveryActions).set({
+      status: shape.status, outcome: shape.outcome,
+      evidence: shape.replay
+        ? { runId: f.runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } }
+        : { runId: f.runId },
+    }).where(eq(issueRecoveryActions.id, f.action.id));
+    const app = createApp();
+    const issue = await request(app).get(`/api/issues/${f.sourceIssueId}`).expect(200);
+    expect(issue.body.executionBlocker).toMatchObject({ recoveryActionId: f.action.id });
+    const listed = await request(app).get(`/api/issues/${f.sourceIssueId}/recovery-actions`).expect(200);
+    expect(listed.body.actions.map((action: { id: string }) => action.id)).toContain(f.action.id);
+    // The assigned reviewer agent reads the same projection.
+    const agentApp = createApp({ type: "agent", agentId: f.reviewerId, companyId: f.companyId, runId: randomUUID(), source: "agent_jwt" });
+    const agentListed = await request(agentApp).get(`/api/issues/${f.sourceIssueId}/recovery-actions`).expect(200);
+    expect(agentListed.body.actions.map((action: { id: string }) => action.id)).toContain(f.action.id);
+    // A resolved no-replay hold still blocks execution but is not the active action.
+    expect(agentListed.body.active?.id ?? null).toBe(shape.status === "active" ? f.action.id : null);
+  });
+
   it("resumes the same pending reviewer after a reconciled never-started run without deciding the stage", async () => {
     const f = await seedBlockedPendingReview();
     const app = createApp();
