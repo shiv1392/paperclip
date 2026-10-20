@@ -155,6 +155,7 @@ import {
   authorizeNativeChatReviewPresentation,
   retryNativeChatReviewPresentation,
 } from "./native-runtime/native-chat-review-presentation.js";
+import { assertIssueUpdateKeepsTransfers } from "./issue-review-transfer.js";
 import {
   applyIssueExecutionPolicyTransition,
   buildInitialIssueMonitorFields,
@@ -11175,6 +11176,14 @@ export function issueService(db: Db) {
             agentId: actorAgentId, runId: actorRunId, stopId: actorRunStopId,
           });
           assertLegacyRunTaskOwnership(actorRun, receiptExisting);
+        }
+        if (patch.status === "done" || patch.executionPolicy !== undefined) {
+          await assertIssueUpdateKeepsTransfers(tx, {
+            companyId: existing.companyId,
+            issueId: id,
+            nextStatus: patch.status,
+            nextExecutionPolicy: patch.executionPolicy,
+          });
         }
         if (actorAgentId && patch.status === "done") {
           const [review] = await tx.select({ id: toolActionRequests.id }).from(toolActionRequests).where(and(eq(toolActionRequests.companyId, existing.companyId), eq(toolActionRequests.issueId, id), inArray(toolActionRequests.status, ["pending", "approved", "executing"]))).limit(1);

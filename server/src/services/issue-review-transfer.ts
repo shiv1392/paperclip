@@ -41,6 +41,17 @@ export type RequestReviewTransferInput = {
   requiredReceipts: { commands: string[] };
 };
 
+export type AttachReviewTransferReceiptsInput = {
+  companyId: string;
+  transferId: string;
+  idempotencyKey: string;
+  expectedReceiptRevision: string | null;
+  source: { issueId: string; stageId: string; commit: string; tree: string };
+  destination: { originalBase: string; finalHead: string; finalTree: string };
+  childResults: Array<{ issueId: string; commit: string; includedInFinalHead: boolean }>;
+  commands: Array<{ command: string; exitCode: number; logSha256: string; testedTree: string }>;
+};
+
 const LIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const OUTSTANDING_SOURCE_STATES = new Set(["pending", "changes_requested", "idle", "none"]);
 
@@ -176,6 +187,30 @@ function copyStageForDestination(stage: IssueExecutionStage): IssueExecutionStag
     approvalsNeeded: stage.approvalsNeeded,
     participants: stage.participants.map((participant) => ({ ...participant, id: randomUUID() })),
   };
+}
+
+function receiptProblems(row: IssueReviewTransferRow, input: AttachReviewTransferReceiptsInput) {
+  const problems: string[] = [];
+  if (input.source.issueId !== row.sourceIssueId || input.source.stageId !== row.sourceStageId) {
+    problems.push("source issue or stage does not match the transfer");
+  }
+  const child = input.childResults.find((result) => result.issueId === row.sourceIssueId);
+  if (!child) problems.push("missing the source child result");
+  else if (!child.includedInFinalHead) problems.push("the source child result is not in the final head");
+  else if (child.commit !== input.source.commit) problems.push("the child result commit does not match the source commit");
+  const required = (row.obligation.requiredReceipts as { commands?: string[] } | undefined)?.commands ?? [];
+  for (const command of required) {
+    const result = input.commands.find((candidate) => candidate.command === command);
+    if (!result) problems.push(`missing required command: ${command}`);
+    else if (result.exitCode !== 0) problems.push(`required command failed: ${command}`);
+    else if (result.testedTree !== input.destination.finalTree) problems.push(`required command ran on another tree: ${command}`);
+  }
+  return problems;
+}
+
+/** The latest receipt is in force; earlier versions stay as history. */
+function currentReceipt(row: IssueReviewTransferRow) {
+  return row.receipts.length > 0 ? row.receipts[row.receipts.length - 1]! : null;
 }
 
 export function issueReviewTransferService(db: Db) {
@@ -396,5 +431,169 @@ export function issueReviewTransferService(db: Db) {
     };
   }
 
-  return { transfer, readTransfers };
+  async function attachReceipts(input: AttachReviewTransferReceiptsInput, actor: ReviewTransferActor) {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(issueReviewTransfers)
+        .where(and(eq(issueReviewTransfers.id, input.transferId), eq(issueReviewTransfers.companyId, input.companyId)))
+        .for("update");
+      if (!row) throw notFound("Review transfer not found");
+      const { idempotencyKey, expectedReceiptRevision: _expected, companyId: _company, transferId: _transfer, ...evidence } = input;
+      const evidenceFingerprint = createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
+      const prior = row.receipts.find((receipt) => receipt.idempotencyKey === idempotencyKey);
+      if (prior) {
+        if (prior.fingerprint !== evidenceFingerprint) {
+          throw conflict("This idempotency key was already used for different receipts.", {
+            code: "review_transfer_idempotency_mismatch",
+          });
+        }
+        return { transfer: row, replayed: true };
+      }
+      if (row.receiptRevision !== input.expectedReceiptRevision) {
+        throw conflict("The transfer receipts changed since they were read. Read them again and resend.", {
+          code: "review_transfer_receipts_stale",
+          receiptRevision: row.receiptRevision,
+        });
+      }
+      const problems = receiptProblems(row, input);
+      if (problems.length > 0) {
+        throw unprocessable("The receipts do not satisfy this transfer.", {
+          code: "review_transfer_receipts_invalid",
+          problems,
+        });
+      }
+      const revision = randomUUID();
+      const receipt = {
+        revision,
+        idempotencyKey,
+        fingerprint: evidenceFingerprint,
+        attachedAt: new Date().toISOString(),
+        actorAgentId: actor.agentId,
+        actorUserId: actor.userId,
+        runId: actor.runId,
+        ...evidence,
+      };
+      const [updated] = await tx
+        .update(issueReviewTransfers)
+        .set({ receipts: [...row.receipts, receipt], receiptRevision: revision, updatedAt: new Date() })
+        .where(eq(issueReviewTransfers.id, row.id))
+        .returning();
+      for (const entityId of [row.sourceIssueId, row.destinationIssueId]) {
+        await logActivity(tx as unknown as Db, {
+          companyId: row.companyId,
+          actorType: actor.agentId ? "agent" : "user",
+          actorId: actor.agentId ?? actor.userId ?? "board",
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.review_transfer_receipts_attached",
+          entityType: "issue",
+          entityId,
+          details: { transferId: row.id, receiptRevision: revision, finalHead: input.destination.finalHead, finalTree: input.destination.finalTree },
+        });
+      }
+      return { transfer: updated!, replayed: false };
+    });
+  }
+
+  async function getTransfer(companyId: string, transferId: string) {
+    const [row] = await db
+      .select()
+      .from(issueReviewTransfers)
+      .where(and(eq(issueReviewTransfers.id, transferId), eq(issueReviewTransfers.companyId, companyId)));
+    return row ?? null;
+  }
+
+  async function sourceIssueIdFor(transferId: string) {
+    const [row] = await db
+      .select({ sourceIssueId: issueReviewTransfers.sourceIssueId })
+      .from(issueReviewTransfers)
+      .where(eq(issueReviewTransfers.id, transferId));
+    return row?.sourceIssueId ?? null;
+  }
+
+  return { transfer, readTransfers, attachReceipts, getTransfer, sourceIssueIdFor };
+}
+
+async function transfersTouching(tx: DbOrTx, companyId: string, issueId: string) {
+  return tx
+    .select()
+    .from(issueReviewTransfers)
+    .where(and(
+      eq(issueReviewTransfers.companyId, companyId),
+      or(eq(issueReviewTransfers.sourceIssueId, issueId), eq(issueReviewTransfers.destinationIssueId, issueId)),
+    ));
+}
+
+/**
+ * Called inside the transaction that records a native review decision. A held
+ * source stage may not be decided at all; a transferred destination stage, and
+ * the delivery stages after it, may not be approved until the transfer has a
+ * complete receipt set.
+ */
+export async function assertReviewEligible(
+  tx: DbOrTx,
+  input: { companyId: string; issueId: string; stageId: string; outcome: string },
+) {
+  const rows = await transfersTouching(tx, input.companyId, input.issueId);
+  const heldSource = rows.find((row) => row.sourceIssueId === input.issueId && row.sourceStageId === input.stageId);
+  if (heldSource) {
+    throw conflict("This review was transferred to the delivery. Decide it on the delivery instead.", {
+      code: "review_transfer_source_held",
+      transferId: heldSource.id,
+      destinationIssueId: heldSource.destinationIssueId,
+    });
+  }
+  if (input.outcome !== "approved") return;
+  const unproven = rows.find((row) => row.destinationIssueId === input.issueId && currentReceipt(row) === null);
+  if (unproven) {
+    throw conflict("A transferred review cannot be approved until its receipts are attached.", {
+      code: "review_transfer_receipts_missing",
+      transferId: unproven.id,
+    });
+  }
+}
+
+/**
+ * Called from the issue update path. A delivery with transferred obligations
+ * cannot be closed without receipts, and its mapped stages cannot be removed
+ * or changed by an ordinary policy edit.
+ */
+export async function assertIssueUpdateKeepsTransfers(
+  tx: DbOrTx,
+  input: {
+    companyId: string;
+    issueId: string;
+    nextStatus: string | undefined;
+    nextExecutionPolicy: Record<string, unknown> | null | undefined;
+  },
+) {
+  const rows = (await transfersTouching(tx, input.companyId, input.issueId))
+    .filter((row) => row.destinationIssueId === input.issueId);
+  if (rows.length === 0) return;
+  if (input.nextStatus === "done") {
+    const unproven = rows.find((row) => currentReceipt(row) === null);
+    if (unproven) {
+      throw conflict("A delivery with transferred reviews cannot close until their receipts are attached.", {
+        code: "review_transfer_receipts_missing",
+        transferId: unproven.id,
+      });
+    }
+  }
+  if (input.nextExecutionPolicy !== undefined) {
+    const nextPolicy = normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
+    for (const row of rows) {
+      const mapped = nextPolicy?.stages.find((stage) => stage.id === row.destinationStageId);
+      const participants = (row.obligation.participants as Array<{ type: string; agentId: string | null; userId: string | null }>) ?? [];
+      const preserved = mapped && participants.every((expected) => mapped.participants.some((actual) =>
+        actual.type === expected.type && (actual.agentId ?? null) === (expected.agentId ?? null)
+          && (actual.userId ?? null) === (expected.userId ?? null)));
+      if (!preserved || mapped.participants.length !== participants.length) {
+        throw conflict("A transferred review stage cannot be removed or changed by a policy edit.", {
+          code: "review_transfer_stage_locked",
+          transferId: row.id,
+        });
+      }
+    }
+  }
 }

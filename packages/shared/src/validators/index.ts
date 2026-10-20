@@ -438,6 +438,8 @@ export {
   issueExecutionPolicySchema,
   requestIssueReviewTransferSchema,
   type RequestIssueReviewTransfer,
+  attachIssueReviewTransferReceiptsSchema,
+  type AttachIssueReviewTransferReceipts,
   issueExecutionMonitorPolicySchema,
   issueExecutionStateSchema,
   issueRecoveryActionReadModelSchema,

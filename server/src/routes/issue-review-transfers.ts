@@ -1,8 +1,8 @@
 import { Router } from "express";
 import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
-import { requestIssueReviewTransferSchema } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
+import { attachIssueReviewTransferReceiptsSchema, requestIssueReviewTransferSchema } from "@paperclipai/shared";
+import { forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, issueService } from "../services/index.js";
 import { issueReviewTransferService } from "../services/issue-review-transfer.js";
@@ -57,6 +57,33 @@ export function issueReviewTransferRoutes(db: Db) {
     );
     res.status(result.replayed ? 200 : 201).json(result);
   });
+
+  router.post(
+    "/review-transfers/:transferId/receipts",
+    validate(attachIssueReviewTransferReceiptsSchema),
+    async (req, res) => {
+      assertBoard(req);
+      const transferId = req.params.transferId as string;
+      // Resolve the transfer through an issue the caller can access, so a
+      // transfer id from another company is indistinguishable from a missing one.
+      const sourceIssueId = await transfers.sourceIssueIdFor(transferId);
+      const source = sourceIssueId ? await issuesSvc.getById(sourceIssueId) : null;
+      const accessible = await getAccessibleResource(req, res, source, "Review transfer not found");
+      if (!accessible) return;
+      const row = await transfers.getTransfer(accessible.companyId, transferId);
+      if (!row) throw notFound("Review transfer not found");
+      const destination = await issuesSvc.getById(row.destinationIssueId);
+      if (!destination) throw notFound("Review transfer not found");
+      await assertCanMutate(req, accessible);
+      await assertCanMutate(req, destination);
+      const actor = getActorInfo(req);
+      const result = await transfers.attachReceipts(
+        { ...req.body, companyId: accessible.companyId, transferId },
+        { userId: actor.actorType === "user" ? actor.actorId : null, agentId: actor.agentId, runId: actor.runId },
+      );
+      res.status(result.replayed ? 200 : 201).json(result);
+    },
+  );
 
   router.get("/issues/:id/review-transfers", async (req, res) => {
     const issue = await getAccessibleResource(req, res, issuesSvc.getById(req.params.id as string), "Issue not found");

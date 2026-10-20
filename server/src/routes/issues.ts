@@ -323,6 +323,7 @@ import {
   createCompanySearchRateLimiter,
   type CompanySearchRateLimiter,
 } from "../services/company-search-rate-limit.js";
+import { assertReviewEligible } from "../services/issue-review-transfer.js";
 import {
   applyIssueExecutionPolicyTransition,
   normalizeIssueExecutionPolicy,
@@ -10110,6 +10111,12 @@ export function issueRoutes(
                 ...nextExecutionState,
                 lastDecisionId: decisionId,
               };
+              await assertReviewEligible(tx, {
+                companyId: lockedIssue.companyId,
+                issueId: lockedIssue.id,
+                stageId: transition.decision.stageId,
+                outcome: transition.decision.outcome,
+              });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
                 companyId: lockedIssue.companyId,
@@ -14710,6 +14717,12 @@ export function issueRoutes(
             }
 
             if (decision && decisionId) {
+              await assertReviewEligible(tx, {
+                companyId: updated.companyId,
+                issueId: updated.id,
+                stageId: decision.stageId,
+                outcome: decision.outcome,
+              });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
                 companyId: updated.companyId,
@@ -18744,6 +18757,12 @@ export function issueRoutes(
             if (!updated) throw new AutoApprovalIssueMissingError();
 
             if (transition.decision && decisionId) {
+              await assertReviewEligible(tx, {
+                companyId: updated.companyId,
+                issueId: updated.id,
+                stageId: transition.decision.stageId,
+                outcome: transition.decision.outcome,
+              });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
                 companyId: updated.companyId,
