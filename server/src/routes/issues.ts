@@ -7102,6 +7102,50 @@ export function issueRoutes(
     }
   }
 
+  /** The source owner can run, and no blocker or open question holds the task. */
+  async function assertRecoveryRetryReady(
+    tx: Db,
+    issue: { id: string; companyId: string; assigneeAgentId: string | null },
+  ) {
+    const sourceOwner = issue.assigneeAgentId
+      ? await agentsSvc.getById(issue.assigneeAgentId)
+      : null;
+    if (
+      !sourceOwner ||
+      sourceOwner.companyId !== issue.companyId ||
+      sourceOwner.status === "paused" ||
+      sourceOwner.status === "terminated"
+    ) {
+      throw conflict(
+        "The assigned agent is unavailable. Resume or review the agent before retrying.",
+        { code: "disposition_recovery_owner_unavailable" },
+      );
+    }
+    const readiness = await svc.getDependencyReadiness(issue.id, tx);
+    if (readiness.unresolvedBlockerCount > 0) {
+      throw conflict("Resolve the task’s blockers before retrying.", { code: "disposition_recovery_retry_blocked" });
+    }
+    // Interaction creation also locks the source issue. Check the durable
+    // wait inside this transaction so retry cannot bypass a newer question
+    // or confirmation after the notice was rendered.
+    const [pendingInteraction] = await tx
+      .select({ id: issueThreadInteractions.id })
+      .from(issueThreadInteractions)
+      .where(and(
+        eq(issueThreadInteractions.companyId, issue.companyId),
+        eq(issueThreadInteractions.issueId, issue.id),
+        eq(issueThreadInteractions.status, "pending"),
+        activeIssueInteractionCondition(),
+      ))
+      .limit(1);
+    if (pendingInteraction) {
+      throw conflict(
+        "Respond to the pending question or confirmation before retrying.",
+        { code: "disposition_recovery_interaction_pending" },
+      );
+    }
+  }
+
   async function assertSafeRecoveryHandBackGates(input: {
     req: Request;
     issue: {
@@ -9841,43 +9885,7 @@ export function issueRoutes(
               { code: "disposition_recovery_retry_stale" },
             );
           }
-          const sourceOwner = lockedIssue.assigneeAgentId
-            ? await agentsSvc.getById(lockedIssue.assigneeAgentId)
-            : null;
-          if (
-            !sourceOwner ||
-            sourceOwner.companyId !== lockedIssue.companyId ||
-            sourceOwner.status === "paused" ||
-            sourceOwner.status === "terminated"
-          ) {
-            throw conflict(
-              "The assigned agent is unavailable. Resume or review the agent before retrying.",
-              { code: "disposition_recovery_owner_unavailable" },
-            );
-          }
-          const readiness = await svc.getDependencyReadiness(lockedIssue.id, tx);
-          if (readiness.unresolvedBlockerCount > 0) {
-            throw conflict("Resolve the task’s blockers before retrying.", { code: "disposition_recovery_retry_blocked" });
-          }
-          // Interaction creation also locks the source issue. Check the durable
-          // wait inside this transaction so retry cannot bypass a newer question
-          // or confirmation after the notice was rendered.
-          const [pendingInteraction] = await tx
-            .select({ id: issueThreadInteractions.id })
-            .from(issueThreadInteractions)
-            .where(and(
-              eq(issueThreadInteractions.companyId, lockedIssue.companyId),
-              eq(issueThreadInteractions.issueId, lockedIssue.id),
-              eq(issueThreadInteractions.status, "pending"),
-              activeIssueInteractionCondition(),
-            ))
-            .limit(1);
-          if (pendingInteraction) {
-            throw conflict(
-              "Respond to the pending question or confirmation before retrying.",
-              { code: "disposition_recovery_interaction_pending" },
-            );
-          }
+          await assertRecoveryRetryReady(tx as unknown as Db, lockedIssue);
         }
 
         if (
