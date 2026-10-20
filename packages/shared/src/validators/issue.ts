@@ -527,6 +527,23 @@ export const issueExecutionStateSchema = z.object({
   changesRequestedCount: z.number().int().nonnegative().optional().default(0),
 });
 
+export const requestIssueReviewTransferSchema = z
+  .object({
+    idempotencyKey: z.string().trim().min(1).max(200),
+    sourceStageId: z.string().guid(),
+    destinationIssueId: z.string().guid(),
+    expectedSourceUpdatedAt: z.string().datetime(),
+    expectedDestinationUpdatedAt: z.string().datetime(),
+    removeBlocksIssueId: z.string().guid().optional().nullable(),
+    reason: z.string().trim().min(1).max(2000),
+    requiredReceipts: z
+      .object({ commands: z.array(z.string().trim().min(1).max(500)).min(1).max(20) })
+      .strict(),
+  })
+  .strict();
+
+export type RequestIssueReviewTransfer = z.infer<typeof requestIssueReviewTransferSchema>;
+
 export const issueRecoveryActionReadModelSchema = z.object({
   id: z.string().guid(),
   companyId: z.string().guid(),
