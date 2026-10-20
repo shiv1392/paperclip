@@ -10111,11 +10111,13 @@ export function issueRoutes(
                 ...nextExecutionState,
                 lastDecisionId: decisionId,
               };
-              await assertReviewEligible(tx, {
+              const reviewManifestBinding = await assertReviewEligible(tx, {
                 companyId: lockedIssue.companyId,
                 issueId: lockedIssue.id,
                 stageId: transition.decision.stageId,
                 outcome: transition.decision.outcome,
+                // This path takes no manifest, so it cannot approve a transfer destination.
+                expectedReviewManifest: null,
               });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
@@ -10127,6 +10129,7 @@ export function issueRoutes(
                 actorUserId: actor.actorType === "user" ? actor.actorId : null,
                 outcome: transition.decision.outcome,
                 body: transition.decision.body,
+                reviewManifestBinding,
                 createdByRunId: actor.runId ?? null,
               });
             }
@@ -13772,6 +13775,7 @@ export function issueRoutes(
         deferWakeForGoal,
         hiddenAt: hiddenAtRaw,
         expectedExecutionPolicy,
+        expectedReviewManifest,
         expectedStatusVersion,
         onBehalfOfUserId: _requestedOnBehalfOfUserId,
         ...updateFields
@@ -14717,11 +14721,12 @@ export function issueRoutes(
             }
 
             if (decision && decisionId) {
-              await assertReviewEligible(tx, {
+              const reviewManifestBinding = await assertReviewEligible(tx, {
                 companyId: updated.companyId,
                 issueId: updated.id,
                 stageId: decision.stageId,
                 outcome: decision.outcome,
+                expectedReviewManifest,
               });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
@@ -14733,6 +14738,7 @@ export function issueRoutes(
                 actorUserId: actor.actorType === "user" ? actor.actorId : null,
                 outcome: decision.outcome,
                 body: decision.body,
+                reviewManifestBinding,
                 createdByRunId: actor.runId ?? null,
               });
             }
@@ -18757,11 +18763,13 @@ export function issueRoutes(
             if (!updated) throw new AutoApprovalIssueMissingError();
 
             if (transition.decision && decisionId) {
-              await assertReviewEligible(tx, {
+              const reviewManifestBinding = await assertReviewEligible(tx, {
                 companyId: updated.companyId,
                 issueId: updated.id,
                 stageId: transition.decision.stageId,
                 outcome: transition.decision.outcome,
+                // This path takes no manifest, so it cannot approve a transfer destination.
+                expectedReviewManifest: null,
               });
               await tx.insert(issueExecutionDecisions).values({
                 id: decisionId,
@@ -18773,6 +18781,7 @@ export function issueRoutes(
                 actorUserId: actor.actorType === "user" ? actor.actorId : null,
                 outcome: transition.decision.outcome,
                 body: transition.decision.body,
+                reviewManifestBinding,
                 createdByRunId: actor.runId ?? null,
               });
             }
