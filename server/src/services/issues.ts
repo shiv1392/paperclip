@@ -11177,12 +11177,14 @@ export function issueService(db: Db) {
           });
           assertLegacyRunTaskOwnership(actorRun, receiptExisting);
         }
-        if (patch.status === "done" || patch.executionPolicy !== undefined) {
+        if (patch.status === "done" || patch.status === "cancelled" || patch.executionPolicy !== undefined
+          || patch.executionState === null) {
           await assertIssueUpdateKeepsTransfers(tx, {
             companyId: existing.companyId,
             issueId: id,
             nextStatus: patch.status,
             nextExecutionPolicy: patch.executionPolicy,
+            clearsExecutionState: patch.executionState === null && existing.executionState !== null,
           });
         }
         if (actorAgentId && patch.status === "done") {

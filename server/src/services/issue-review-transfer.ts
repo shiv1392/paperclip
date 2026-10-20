@@ -566,10 +566,29 @@ export async function assertIssueUpdateKeepsTransfers(
     issueId: string;
     nextStatus: string | undefined;
     nextExecutionPolicy: Record<string, unknown> | null | undefined;
+    clearsExecutionState?: boolean;
   },
 ) {
-  const rows = (await transfersTouching(tx, input.companyId, input.issueId))
-    .filter((row) => row.destinationIssueId === input.issueId);
+  const touching = await transfersTouching(tx, input.companyId, input.issueId);
+  const heldSource = touching.find((row) => row.sourceIssueId === input.issueId);
+  if (heldSource) {
+    // The source keeps its pending review as audited history; ordinary edits
+    // must not close it or erase the stage the transfer points at.
+    const nextPolicy = input.nextExecutionPolicy === undefined
+      ? undefined
+      : normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
+    const dropsHeldStage = nextPolicy !== undefined
+      && !touching.filter((row) => row.sourceIssueId === input.issueId)
+        .every((row) => nextPolicy?.stages.some((stage) => stage.id === row.sourceStageId));
+    if (input.nextStatus === "done" || input.nextStatus === "cancelled" || input.clearsExecutionState || dropsHeldStage) {
+      throw conflict("This task's review moved to the delivery. Its review history cannot be closed or cleared here.", {
+        code: "review_transfer_source_held",
+        transferId: heldSource.id,
+        destinationIssueId: heldSource.destinationIssueId,
+      });
+    }
+  }
+  const rows = touching.filter((row) => row.destinationIssueId === input.issueId);
   if (rows.length === 0) return;
   if (input.nextStatus === "done") {
     const unproven = rows.find((row) => currentReceipt(row) === null);
@@ -596,4 +615,46 @@ export async function assertIssueUpdateKeepsTransfers(
       }
     }
   }
+}
+
+export type ReviewTransferHold = {
+  transferId: string;
+  destinationIssueId: string;
+  sourceStageId: string;
+};
+
+/**
+ * Returns the hold that stops `agentId` from being dispatched as the reviewer
+ * of a transferred stage on `issueId`, or null. The source keeps its pending
+ * state as history, so its recorded reviewer must never be woken for it again.
+ * Other work on the source, such as its executor, is not held.
+ */
+export async function findReviewTransferHold(
+  tx: DbOrTx,
+  input: { companyId: string; issueId: string; agentId: string },
+): Promise<ReviewTransferHold | null> {
+  const rows = await tx
+    .select({
+      transferId: issueReviewTransfers.id,
+      destinationIssueId: issueReviewTransfers.destinationIssueId,
+      sourceStageId: issueReviewTransfers.sourceStageId,
+      obligation: issueReviewTransfers.obligation,
+      executionState: issues.executionState,
+    })
+    .from(issueReviewTransfers)
+    .innerJoin(issues, eq(issues.id, issueReviewTransfers.sourceIssueId))
+    .where(and(
+      eq(issueReviewTransfers.companyId, input.companyId),
+      eq(issueReviewTransfers.sourceIssueId, input.issueId),
+    ));
+  for (const row of rows) {
+    const state = parseIssueExecutionState(row.executionState);
+    const participants = (row.obligation.participants as Array<{ agentId?: string | null }> | undefined) ?? [];
+    const isStageReviewer = participants.some((participant) => participant.agentId === input.agentId)
+      || (state?.currentStageId === row.sourceStageId && state.currentParticipant?.agentId === input.agentId);
+    if (isStageReviewer) {
+      return { transferId: row.transferId, destinationIssueId: row.destinationIssueId, sourceStageId: row.sourceStageId };
+    }
+  }
+  return null;
 }

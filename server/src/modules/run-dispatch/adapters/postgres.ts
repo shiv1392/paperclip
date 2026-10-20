@@ -1,3 +1,4 @@
+import { findReviewTransferHold } from "../../../services/issue-review-transfer.js";
 import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
 import { validateReconstructedWorkspaceDispatch } from "../../../services/native-runtime/native-workspace-reconstruction.js";
@@ -1006,6 +1007,12 @@ export function createPostgresRunDispatchAdapter(
         } };
       }
     }
+    const reviewTransferHold = await findReviewTransferHold(tx, { companyId: run.companyId, issueId, agentId: run.agentId });
+    if (reviewTransferHold) return { issueId, facts: null, executionBlocker: null, decision: { stale: true as const,
+      errorCode: "issue_review_transferred" as const,
+      reason: "This review moved to the delivery. Decide it there; the child task keeps its history.",
+      details: { issueId, ...reviewTransferHold },
+    } };
     const recovery = await getExecutionBlocker(tx, run.companyId, issueId, { conversationResetCommentId: deriveCommentId(contextSnapshot) });
     if (recovery) return { issueId, facts: null, executionBlocker: recovery, decision: { stale: true as const,
       errorCode: "execution_reconciliation_required" as const, reason: recovery.nextAction,

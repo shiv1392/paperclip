@@ -1,15 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  agentRuntimeState,
   agentWakeupRequests,
   agents,
+  authUsers,
   companies,
   companyMemberships,
+  companySkills,
   createDb,
+  heartbeatRunEvents,
   heartbeatRuns,
   issueExecutionDecisions,
   issueRelations,
@@ -24,6 +28,10 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { issueReviewTransferRoutes } from "../routes/issue-review-transfers.js";
 import { issueRoutes } from "../routes/issues.js";
+import { heartbeatService } from "../services/heartbeat.js";
+import { createPostgresRunDispatchAdapter } from "../modules/run-dispatch/adapters/postgres.js";
+import { createPostgresWakeQueueAdapter } from "../modules/wake-queue/adapters/postgres.js";
+import { createReleaseIssueExecution } from "../modules/wake-queue/application/use-cases.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -40,17 +48,31 @@ describeEmbeddedPostgres("issue review transfers", () => {
   }, 30_000);
 
   afterEach(async () => {
+    // Issue routes wake reviewers after responding; let that work land before cleanup.
+    let previous = -1;
+    let stableChecks = 0;
+    for (let attempt = 0; attempt < 40 && stableChecks < 3; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const [{ count }] = await db.execute<{ count: number }>(sql`select count(*)::int as count from agent_wakeup_requests`) as any;
+      stableChecks = count === previous ? stableChecks + 1 : 0;
+      previous = count;
+    }
     await db.delete(issueReviewTransfers);
     await db.delete(issueThreadInteractions);
-    await db.delete(agentWakeupRequests);
+    await db.delete(heartbeatRunEvents);
+    await db.execute(sql`update heartbeat_runs set retry_of_run_id = null`);
     await db.delete(heartbeatRuns);
+    await db.delete(agentWakeupRequests);
     await db.delete(issueExecutionDecisions);
     await db.delete(issueRelations);
     await db.delete(activityLog);
     await db.delete(issues);
+    await db.delete(agentRuntimeState);
     await db.delete(agents);
+    await db.delete(companySkills);
     await db.delete(companyMemberships);
     await db.delete(companies);
+    await db.delete(authUsers);
   });
 
   afterAll(async () => {
@@ -91,7 +113,10 @@ describeEmbeddedPostgres("issue review transfers", () => {
     const prefix = `RT${companyId.replaceAll("-", "").slice(0, 6).toUpperCase()}`;
     const reviewerId = randomUUID();
     const builderId = randomUUID();
-    await db.insert(companies).values({ id: companyId, name: "Transfer Co", issuePrefix: prefix });
+    const responsibleUserId = `operator-${companyId.slice(0, 8)}`;
+    await db.insert(authUsers).values({ id: responsibleUserId, name: "Operator", email: `${responsibleUserId}@example.test`,
+      emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+    await db.insert(companies).values({ id: companyId, name: "Transfer Co", issuePrefix: prefix, defaultResponsibleUserId: responsibleUserId });
     if (options.reviewerUserId) {
       await db.insert(companyMemberships).values({
         companyId, principalType: "user", principalId: options.reviewerUserId, status: "active", membershipRole: "owner",
@@ -538,5 +563,159 @@ describeEmbeddedPostgres("issue review transfers", () => {
     expect(await db.select().from(issueExecutionDecisions)).toHaveLength(0);
     const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
     expect(source!.executionState).toEqual(fixture.source.executionState);
+  });
+  describe("source dispatch hold", () => {
+    async function heldFixture() {
+      const fixture = await seedDelivery();
+      const transfer = await transferAndReadParent(fixture);
+      // Make the held review look dispatchable: in_review with the reviewer assigned.
+      await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, fixture.sourceId));
+      return { fixture, transfer };
+    }
+
+    async function runsFor(agentId: string, issueId: string) {
+      return (await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId)))
+        .filter((run) => (run.contextSnapshot as { issueId?: string } | null)?.issueId === issueId);
+    }
+
+    it.each([
+      ["assignment", "issue_assigned"],
+      ["automation", "issue_blockers_resolved"],
+      ["automation", "issue_monitor_due"],
+      ["on_demand", "retry_failed_run"],
+    ] as const)("skips a %s wake (%s) for the held reviewer without creating a run", async (wakeSource, reason) => {
+      const { fixture, transfer } = await heldFixture();
+      const heartbeat = heartbeatService(db, { runtimeEnv: {} });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await heartbeat.wakeup(fixture.reviewerId, {
+          source: wakeSource, triggerDetail: "system", reason,
+          payload: { issueId: fixture.sourceId }, contextSnapshot: { issueId: fixture.sourceId },
+          requestedByActorType: "system",
+        });
+      }
+      expect(await runsFor(fixture.reviewerId, fixture.sourceId)).toHaveLength(0);
+      const wakes = (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, fixture.reviewerId)))
+        .filter((wake) => (wake.payload as { issueId?: string } | null)?.issueId === fixture.sourceId);
+      expect(wakes.length).toBeGreaterThan(0);
+      expect(wakes.every((wake) => wake.status === "skipped" && wake.reason === "issue_review_transferred")).toBe(true);
+      expect(wakes[0]!.payload).toMatchObject({ reviewTransfer: { transferId: transfer.id, destinationIssueId: fixture.parentId } });
+      const [heldSource] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(heldSource!.executionState).toEqual(fixture.source.executionState);
+    });
+
+    it("cancels an already-queued reviewer run at claim time", async () => {
+      const { fixture } = await heldFixture();
+      const runId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: runId, companyId: fixture.companyId, agentId: fixture.reviewerId, invocationSource: "automation",
+        status: "queued", contextSnapshot: { issueId: fixture.sourceId },
+      });
+      const adapter = createPostgresRunDispatchAdapter(db);
+      expect(await adapter.cancelStaleQueuedRun({
+        companyId: fixture.companyId, runId, expectedStatus: "queued", now: new Date(),
+      })).toMatchObject({ outcome: "cancelled", errorCode: "issue_review_transferred" });
+    });
+
+    function releaseDrain() {
+      return createReleaseIssueExecution({
+        issueLock: createPostgresWakeQueueAdapter(db, {
+          resolveResponsibleUserId: async () => "responsible-user",
+          getRoutineEnv: async () => ({ routineId: null, env: null, responsibleUserId: null }),
+          resolveSessionBeforeForWakeup: async () => null,
+        }),
+        recovery: { escalateStrandedAssignedIssue: async () => undefined, escalateStrandedRecoveryIssueInPlace: async () => undefined },
+      });
+    }
+
+    it("cancels a deferred reviewer wake instead of promoting it when execution is released", async () => {
+      const { fixture } = await heldFixture();
+      const finishedRunId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: finishedRunId, companyId: fixture.companyId, agentId: fixture.builderId, invocationSource: "assignment",
+        status: "succeeded", finishedAt: new Date(), contextSnapshot: { issueId: fixture.sourceId },
+      });
+      const [deferred] = await db.insert(agentWakeupRequests).values({
+        companyId: fixture.companyId, agentId: fixture.reviewerId, source: "automation", reason: "issue_commented",
+        status: "deferred_issue_execution", requestedByActorType: "user", requestedByActorId: "responsible-user",
+        payload: { issueId: fixture.sourceId },
+      }).returning();
+      const outcome = await releaseDrain()({
+        companyId: fixture.companyId, runId: finishedRunId, now: new Date(), suppressImmediateRecovery: true, resumeStrandedQueue: true,
+      });
+      expect(outcome.outcome.kind).not.toBe("promoted");
+      const [after] = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, deferred!.id));
+      expect(after).toMatchObject({ status: "cancelled", runId: null });
+      expect(await runsFor(fixture.reviewerId, fixture.sourceId)).toHaveLength(0);
+    });
+
+    it("does not escalate the held source as a stuck review participant", async () => {
+      const { fixture } = await heldFixture();
+      // A finished reviewer turn that still owns the source's execution lock,
+      // as when a pre-transfer review wake completes after the transfer.
+      const finishedRunId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: finishedRunId, companyId: fixture.companyId, agentId: fixture.reviewerId, invocationSource: "assignment",
+        status: "succeeded", finishedAt: new Date(),
+        contextSnapshot: { issueId: fixture.sourceId, wakeReason: "execution_review_requested" },
+      });
+      await db.update(issues).set({ executionRunId: finishedRunId }).where(eq(issues.id, fixture.sourceId));
+      const result = await releaseDrain()({ companyId: fixture.companyId, runId: finishedRunId, now: new Date() });
+      expect(result.outcome.kind).toBe("released");
+      const [heldSource] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(heldSource).toMatchObject({ status: "in_review", executionState: fixture.source.executionState });
+      expect((await runsFor(fixture.reviewerId, fixture.sourceId)).map((run) => run.id)).toEqual([finishedRunId]);
+    });
+
+    it.each([
+      ["closing the source", { status: "done", comment: "Close the child." }],
+      ["clearing the source policy", { executionPolicy: null }],
+      ["dropping the held source stage", { executionPolicy: { mode: "normal", commentRequired: true, stages: [] } }],
+    ])("refuses %s while its review is transferred", async (_label, body) => {
+      const { fixture } = await heldFixture();
+      const response = await request(createApp())
+        .patch(`/api/issues/${fixture.sourceId}`)
+        .send(body)
+        .expect(409);
+      expect(errorCode(response)).toBe("review_transfer_source_held");
+      const [heldSource] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(heldSource).toMatchObject({ executionState: fixture.source.executionState, executionPolicy: fixture.source.executionPolicy });
+    });
+
+    it("keeps repeated stranded-work sweeps from waking or escalating the held source", async () => {
+      const { fixture } = await heldFixture();
+      // The child reviewer is no longer invokable, which normally escalates a
+      // pending review with no run as stranded.
+      await db.update(agents).set({ status: "terminated" }).where(eq(agents.id, fixture.reviewerId));
+      const heartbeat = heartbeatService(db, { runtimeEnv: {} });
+      for (let sweep = 0; sweep < 2; sweep += 1) await heartbeat.reconcileStrandedAssignedIssues();
+      expect(await runsFor(fixture.reviewerId, fixture.sourceId)).toHaveLength(0);
+      const wakes = (await db.select().from(agentWakeupRequests))
+        .filter((wake) => (wake.payload as { issueId?: string } | null)?.issueId === fixture.sourceId);
+      expect(wakes.filter((wake) => wake.status !== "skipped")).toHaveLength(0);
+      const [heldSource] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(heldSource).toMatchObject({ status: "in_review", executionState: fixture.source.executionState });
+      const recoveryChildren = await db.select().from(issues).where(eq(issues.parentId, fixture.sourceId));
+      expect(recoveryChildren).toHaveLength(0);
+    });
+
+    it("still admits the executor on the held source", async () => {
+      const { fixture } = await heldFixture();
+      await db.update(issues).set({ status: "in_progress", assigneeAgentId: fixture.builderId }).where(eq(issues.id, fixture.sourceId));
+      // Occupy the executor's only slot so admission is real but no provider launches.
+      await db.update(agents).set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1 } } }).where(eq(agents.id, fixture.builderId));
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(), companyId: fixture.companyId, agentId: fixture.builderId, invocationSource: "manual", status: "running",
+      });
+      const heartbeat = heartbeatService(db, { runtimeEnv: {} });
+      await heartbeat.wakeup(fixture.builderId, {
+        source: "assignment", triggerDetail: "system", reason: "issue_assigned",
+        payload: { issueId: fixture.sourceId }, contextSnapshot: { issueId: fixture.sourceId },
+        requestedByActorType: "system",
+      });
+      const wakes = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, fixture.builderId));
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]!.status).not.toBe("skipped");
+      expect(await runsFor(fixture.builderId, fixture.sourceId)).toHaveLength(1);
+    });
   });
 });
