@@ -621,8 +621,9 @@ function buildPendingState(input: {
 
 function startingReviewRounds(previous: IssueExecutionState | null, stage: IssueExecutionStage) {
   const previousRounds = previous?.changesRequestedCount ?? 0;
-  if (previous?.currentStageId === stage.id) return previousRounds;
-  return Math.max(previousRounds, stage.carriedReviewRounds ?? 0);
+  if (previous?.currentStageId === stage.id || stage.carriedReviewRounds === undefined) return previousRounds;
+  // A transferred stage starts from its source's rounds, never from another stage's count.
+  return stage.carriedReviewRounds;
 }
 
 function buildChangesRequestedState(

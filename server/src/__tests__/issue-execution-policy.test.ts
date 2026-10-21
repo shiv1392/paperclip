@@ -2349,6 +2349,25 @@ describe("review round circuit breaker", () => {
       expect(result.patch.executionState).toMatchObject({ currentStageId: carriedStage.id, changesRequestedCount: 2 });
     });
 
+    it("starts from the carried rounds, not from another stage's count", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress", assigneeAgentId: coderAgentId, assigneeUserId: null, responsibleUserId: boardUserId,
+          executionPolicy: carriedPolicy,
+          executionState: {
+            status: "idle", currentStageId: null, currentStageIndex: null, currentStageType: null,
+            currentParticipant: null, returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: "changes_requested", changesRequestedCount: 5,
+          },
+        },
+        policy: carriedPolicy,
+        requestedStatus: "in_review",
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+      });
+      expect(result.patch.executionState).toMatchObject({ currentStageId: carriedStage.id, changesRequestedCount: 2 });
+    });
+
     it("escalates on the first new agent round once the carried rounds reach the cap", () => {
       const result = applyIssueExecutionPolicyTransition({
         issue: {
