@@ -434,7 +434,7 @@ function actorPrincipal(actor: ActorLike): IssueExecutionStagePrincipal | null {
   return null;
 }
 
-function principalsEqual(a: IssueExecutionStagePrincipal | null, b: IssueExecutionStagePrincipal | null): boolean {
+export function principalsEqual(a: IssueExecutionStagePrincipal | null, b: IssueExecutionStagePrincipal | null): boolean {
   if (!a || !b) return false;
   if (a.type !== b.type) return false;
   return a.type === "agent" ? a.agentId === b.agentId : a.userId === b.userId;
@@ -498,6 +498,23 @@ function selectStageParticipant(
 function stageHasParticipant(stage: IssueExecutionStage, participant: IssueExecutionStagePrincipal | null): boolean {
   if (!participant) return false;
   return stage.participants.some((candidate) => principalsEqual(candidate, participant));
+}
+
+/**
+ * An escalated review is deliberately held by a human who is not in the
+ * stage's configured participants, after the round limit is reached.
+ */
+export function isEscalatedReviewHold(input: {
+  policy: IssueExecutionPolicy | null;
+  stage: IssueExecutionStage;
+  state: IssueExecutionState | null;
+  currentParticipant: IssueExecutionStagePrincipal | null;
+}): boolean {
+  return (
+    input.currentParticipant?.type === "user" &&
+    !stageHasParticipant(input.stage, input.currentParticipant) &&
+    (input.state?.changesRequestedCount ?? 0) >= resolveMaxReviewRounds(input.policy)
+  );
 }
 
 function patchForPrincipal(principal: IssueExecutionStagePrincipal | null) {
@@ -735,10 +752,12 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
     // participant would silently undo the escalation on the next unrelated
     // PATCH, so the hold is sticky until the escalated human decides — their
     // own decisions fall through to the participant decision branch below.
-    const escalatedHold =
-      currentParticipant.type === "user" &&
-      !stageHasParticipant(activeStage, currentParticipant) &&
-      (existingState?.changesRequestedCount ?? 0) >= resolveMaxReviewRounds(input.policy);
+    const escalatedHold = isEscalatedReviewHold({
+      policy: input.policy,
+      stage: activeStage,
+      state: existingState,
+      currentParticipant,
+    });
     if (escalatedHold && !principalsEqual(currentParticipant, actor)) {
       // An empty patch would not override the caller's own requested fields,
       // so a status or assignee change from a non-escalated actor must be
