@@ -506,7 +506,22 @@ export function issueReviewTransferService(db: Db) {
           destination: destinationContract,
         });
       }
-      const usedReviewRounds = stageIsCurrent ? sourceState?.changesRequestedCount ?? 0 : 0;
+      // The engine only compares the count with the limit, so carrying at
+      // most the limit keeps the same behaviour within the stage schema.
+      const usedReviewRounds = Math.min(
+        stageIsCurrent ? sourceState?.changesRequestedCount ?? 0 : 0,
+        sourceContract.maxReviewRounds,
+      );
+      // Used-up rounds mean the review now belongs to the escalation human,
+      // even when that human is also a configured participant. On the
+      // delivery the stage would start with its first participant instead.
+      if (sourceContract.escalationUserId && usedReviewRounds >= sourceContract.maxReviewRounds) {
+        throw conflict("The source review used all its agent rounds, so it is held for its escalation reviewer. That reviewer must decide it on the source task.", {
+          code: "review_transfer_source_escalated",
+          usedReviewRounds,
+          maxReviewRounds: sourceContract.maxReviewRounds,
+        });
+      }
 
       const destinationState = parseIssueExecutionState(destination.executionState);
       if (destinationState && destinationState.status !== "idle") {

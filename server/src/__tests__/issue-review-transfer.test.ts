@@ -546,6 +546,52 @@ describeEmbeddedPostgres("issue review transfers", () => {
         ]);
       });
 
+      it("refuses a source whose rounds are used up when its escalation human is also a participant", async () => {
+        const fixture = await seedDelivery();
+        const responsible = (await db.select().from(companies).where(eq(companies.id, fixture.companyId)))[0]!.defaultResponsibleUserId!;
+        // Both tasks escalate to the same human, so only the used-up rounds can refuse the transfer.
+        await db.update(issues).set({ responsibleUserId: responsible }).where(eq(issues.id, fixture.parentId));
+        await db.update(issues).set({ responsibleUserId: responsible }).where(eq(issues.id, fixture.sourceId));
+        const humanParticipant = { id: randomUUID(), type: "user", agentId: null, userId: responsible };
+        const stage = { ...fixture.sourceStage, participants: [...fixture.sourceStage.participants, humanParticipant] };
+        const heldState = {
+          ...(fixture.source.executionState as Record<string, unknown>),
+          currentParticipant: { type: "user", agentId: null, userId: responsible },
+          changesRequestedCount: 3,
+        };
+        await db.update(issues).set({
+          executionPolicy: { mode: "normal", commentRequired: true, stages: [stage] },
+          executionState: heldState, assigneeAgentId: null, assigneeUserId: responsible,
+        }).where(eq(issues.id, fixture.sourceId));
+        const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        const [parentBefore] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const response = await request(createApp())
+          .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+          .send(transferBody(fixture, {
+            expectedSourceUpdatedAt: source!.updatedAt.toISOString(),
+            expectedDestinationUpdatedAt: parentBefore!.updatedAt.toISOString(),
+          }))
+          .expect(409);
+        expect(errorCode(response)).toBe("review_transfer_source_escalated");
+        expect(await db.select().from(issueReviewTransfers)).toHaveLength(0);
+        const [after] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        expect(after!.executionState).toEqual(heldState);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(parent!.executionPolicy).toEqual(fixture.parent.executionPolicy);
+      });
+
+      it("carries at most the round limit when the source has no escalation human", async () => {
+        const fixture = await seedDelivery();
+        const source = await sourceWithRounds(fixture, fixture.sourceId, 60);
+        const created = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`)
+          .send(transferBody(fixture, { expectedSourceUpdatedAt: source.updatedAt.toISOString() })).expect(201);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const stages = (parent!.executionPolicy as { stages: Array<Record<string, unknown>> }).stages;
+        expect(stages[0]).toMatchObject({ id: created.body.transfer.destinationStageId, carriedReviewRounds: 3 });
+        // The stored policy stays valid for the engine.
+        await startParentReview(fixture);
+      });
+
       it.each([
         ["a different round limit", { executionPolicy: "maxReviewRounds" }],
         ["a different escalation human", { responsibleUserId: "other-escalation-owner" }],

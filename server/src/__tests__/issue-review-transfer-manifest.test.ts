@@ -356,6 +356,20 @@ describeEmbeddedPostgres("issue review transfer manifest", () => {
         expect(decisions.every((decision) => decision.reviewManifestBinding !== null)).toBe(true);
       });
 
+      it("leaves a closed delivery unchanged when an override arrives after the gate approval", async () => {
+        const { fixture } = await mappedApproved();
+        expect((await approveParent(fixture, "Approved whole delivery.")).status).toBe(200);
+        const decisionsBefore = await db.select().from(issueExecutionDecisions);
+        await request(createApp({ ...board, userId: "other-board-user" }))
+          .patch(`/api/issues/${fixture.parentId}`)
+          .send({ status: "done", comment: "Override and close." })
+          .expect(200);
+        expect(await db.select().from(issueExecutionDecisions)).toEqual(decisionsBefore);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(parent!.status).toBe("done");
+        expect((parent!.executionState as { status: string }).status).toBe("completed");
+      });
+
       it("keeps one bound approval per stage when an override races the gate approval", async () => {
         const { fixture } = await mappedApproved();
         const manifest = await readManifest(fixture.parentId);
