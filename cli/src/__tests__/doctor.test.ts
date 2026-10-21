@@ -16,6 +16,7 @@ vi.mock("../services/service-manager.js", async (importOriginal) => ({
 }));
 
 const ORIGINAL_ENV = { ...process.env };
+let hostRoot: string | undefined;
 
 async function availablePort(): Promise<number> {
   const server = net.createServer();
@@ -102,7 +103,7 @@ describe("doctor", () => {
     delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
     delete process.env.PAPERCLIP_SHIM_PATH;
     delete process.env.PAPERCLIP_SERVICE_MANAGED;
-    const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-host-"));
+    hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-host-"));
     process.env.HOME = path.join(hostRoot, "home");
     process.env.PAPERCLIP_HOME = path.join(hostRoot, "paperclip");
     detectServiceManagerMock.mockReset();
@@ -111,6 +112,8 @@ describe("doctor", () => {
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    if (hostRoot) fs.rmSync(hostRoot, { recursive: true, force: true });
+    hostRoot = undefined;
   });
 
   it("re-runs repairable checks so repaired failures do not remain blocking", async () => {
