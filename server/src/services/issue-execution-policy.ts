@@ -451,7 +451,10 @@ function resolveMaxReviewRounds(policy: IssueExecutionPolicy | null): number {
  * task: the round limit and the human who receives the review when it is
  * reached. Both are per task, not per stage.
  */
-export function reviewEscalationContract(issue: IssueLike, policy: IssueExecutionPolicy | null) {
+export function reviewEscalationContract(
+  issue: Pick<IssueLike, "responsibleUserId" | "createdByUserId">,
+  policy: IssueExecutionPolicy | null,
+) {
   return { maxReviewRounds: resolveMaxReviewRounds(policy), escalationUserId: reviewEscalationUserId(issue) };
 }
 
@@ -460,7 +463,7 @@ export function reviewEscalationContract(issue: IssueLike, policy: IssueExecutio
  * changes-requested rounds. Without one the loop keeps handing back to the
  * return assignee (pre-existing behavior) rather than stalling the stage.
  */
-function reviewEscalationUserId(issue: IssueLike): string | null {
+function reviewEscalationUserId(issue: Pick<IssueLike, "responsibleUserId" | "createdByUserId">): string | null {
   const responsible = issue.responsibleUserId?.trim();
   if (responsible) return responsible;
   const creator = issue.createdByUserId?.trim();
