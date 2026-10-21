@@ -195,6 +195,37 @@ function assertUnchanged(issue: typeof issues.$inferSelect, expected: string, ro
   }
 }
 
+/**
+ * The canonical, comparable form of review configuration: stage ids, order,
+ * type, approval count and participant principals, plus the round limit that
+ * decides escalation. Participant row ids are left out because policy
+ * normalization may regenerate them.
+ */
+function canonicalReview(policy: IssueExecutionPolicy | null, stageId?: string) {
+  const stages = policyStages(policy).filter((stage) => stageId === undefined || stage.id === stageId);
+  return JSON.stringify({
+    maxReviewRounds: policy?.maxReviewRounds ?? null,
+    stages: stages.map((stage) => ({
+      id: stage.id,
+      type: stage.type,
+      approvalsNeeded: stage.approvalsNeeded,
+      participants: stage.participants.map((participant) => ({
+        type: participant.type,
+        agentId: participant.agentId ?? null,
+        userId: participant.userId ?? null,
+      })),
+    })),
+  });
+}
+
+function samePrincipal(
+  a: { type: string; agentId?: string | null; userId?: string | null } | null | undefined,
+  b: { type: string; agentId?: string | null; userId?: string | null } | null | undefined,
+) {
+  if (!a || !b) return !a && !b;
+  return a.type === b.type && (a.agentId ?? null) === (b.agentId ?? null) && (a.userId ?? null) === (b.userId ?? null);
+}
+
 function copyStageForDestination(stage: IssueExecutionStage): IssueExecutionStage {
   return {
     id: randomUUID(),
@@ -438,6 +469,16 @@ export function issueReviewTransferService(db: Db) {
         });
       }
 
+      // An escalated review is held by a human outside the configured stage.
+      // Copying the configured participants would hand it back to them.
+      const currentParticipant = stageIsCurrent ? sourceState?.currentParticipant ?? null : null;
+      if (currentParticipant && !sourceStage.participants.some((participant) => samePrincipal(participant, currentParticipant))) {
+        throw conflict("The source review is escalated to a reviewer outside its stage. That reviewer must decide it on the source task.", {
+          code: "review_transfer_source_escalated",
+          currentParticipant,
+        });
+      }
+
       const destinationPolicy = normalizeIssueExecutionPolicy(destination.executionPolicy ?? null);
       if (!destinationPolicy || destinationPolicy.stages.length === 0) {
         throw unprocessable("The destination has no native review gate to hold this obligation.", {
@@ -529,6 +570,8 @@ export function issueReviewTransferService(db: Db) {
             participants: sourceStage.participants,
             approvalsNeeded: sourceStage.approvalsNeeded,
             commentRequired: sourcePolicy?.commentRequired ?? true,
+            maxReviewRounds: sourcePolicy?.maxReviewRounds ?? null,
+            currentStageId: sourceState?.currentStageId ?? null,
             returnAssignee: sourceState?.returnAssignee ?? null,
             currentParticipant: sourceState?.currentParticipant ?? null,
             sourceStateStatus: stateStatus,
@@ -776,9 +819,11 @@ export async function assertReviewEligible(
 }
 
 /**
- * Called from the issue update path. A delivery with transferred obligations
- * cannot be closed without receipts, and its mapped stages cannot be removed
- * or changed by an ordinary policy edit.
+ * Called from the issue update path, with the issue row locked. A held source
+ * cannot be closed or cleared, and its transferred stage, current reviewer,
+ * current stage and return owner cannot change. A delivery with transfers
+ * cannot close without receipts and decisions, and none of its review stages
+ * can change: the obligations it holds are fixed when they are transferred.
  */
 export async function assertIssueUpdateKeepsTransfers(
   tx: DbOrTx,
@@ -787,28 +832,47 @@ export async function assertIssueUpdateKeepsTransfers(
     issueId: string;
     nextStatus: string | undefined;
     nextExecutionPolicy: Record<string, unknown> | null | undefined;
-    clearsExecutionState?: boolean;
+    nextExecutionState?: Record<string, unknown> | null;
   },
 ) {
   const touching = await transfersTouching(tx, input.companyId, input.issueId);
-  const heldSource = touching.find((row) => row.sourceIssueId === input.issueId && row.status === "held");
-  if (heldSource) {
-    // The source keeps its pending review as audited history; ordinary edits
-    // must not close it or erase the stage the transfer points at.
-    const nextPolicy = input.nextExecutionPolicy === undefined
-      ? undefined
-      : normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
-    const dropsHeldStage = nextPolicy !== undefined
-      && !touching.filter((row) => row.sourceIssueId === input.issueId)
-        .every((row) => nextPolicy?.stages.some((stage) => stage.id === row.sourceStageId));
-    if (input.nextStatus === "done" || input.nextStatus === "cancelled" || input.clearsExecutionState || dropsHeldStage) {
-      throw conflict("This task's review moved to the delivery. Its review history cannot be closed or cleared here.", {
+  if (touching.length === 0) return;
+  const [current] = await tx
+    .select({ executionPolicy: issues.executionPolicy, executionState: issues.executionState })
+    .from(issues)
+    .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)));
+  const currentPolicy = normalizeIssueExecutionPolicy(current?.executionPolicy ?? null);
+  const nextPolicy = input.nextExecutionPolicy === undefined
+    ? currentPolicy
+    : normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
+
+  const outgoing = touching.filter((row) => row.sourceIssueId === input.issueId);
+  if (outgoing.length > 0) {
+    const heldSource = outgoing.find((row) => row.status === "held");
+    const sourceHeld = (transferId: string, destinationIssueId: string) =>
+      conflict("This task's review moved to the delivery. Its review history cannot be closed, cleared or changed here.", {
         code: "review_transfer_source_held",
-        transferId: heldSource.id,
-        destinationIssueId: heldSource.destinationIssueId,
+        transferId,
+        destinationIssueId,
       });
+    const clears = input.nextExecutionState === null && current?.executionState != null;
+    if (heldSource && (input.nextStatus === "done" || input.nextStatus === "cancelled" || clears)) {
+      throw sourceHeld(heldSource.id, heldSource.destinationIssueId);
+    }
+    const changedStage = outgoing.find((row) =>
+      canonicalReview(currentPolicy, row.sourceStageId) !== canonicalReview(nextPolicy, row.sourceStageId));
+    if (changedStage) throw sourceHeld(changedStage.id, changedStage.destinationIssueId);
+    if (heldSource && input.nextExecutionState) {
+      const before = parseIssueExecutionState(current?.executionState ?? null);
+      const after = parseIssueExecutionState(input.nextExecutionState);
+      if ((before?.currentStageId ?? null) !== (after?.currentStageId ?? null)
+        || !samePrincipal(before?.currentParticipant, after?.currentParticipant)
+        || !samePrincipal(before?.returnAssignee, after?.returnAssignee)) {
+        throw sourceHeld(heldSource.id, heldSource.destinationIssueId);
+      }
     }
   }
+
   const rows = touching.filter((row) => row.destinationIssueId === input.issueId);
   if (rows.length === 0) return;
   if (input.nextStatus === "done") {
@@ -829,31 +893,27 @@ export async function assertIssueUpdateKeepsTransfers(
       });
     }
   }
-  if (input.nextExecutionPolicy !== undefined) {
-    const nextPolicy = normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
-    if (await manifestIsFrozen(tx, input.companyId, input.issueId)) {
-      const [current] = await tx
-        .select({ executionPolicy: issues.executionPolicy })
-        .from(issues)
-        .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)));
-      const currentPolicy = normalizeIssueExecutionPolicy(current?.executionPolicy ?? null);
-      if (JSON.stringify(policyStages(currentPolicy)) !== JSON.stringify(policyStages(nextPolicy))) {
-        throw manifestFrozen(input.issueId);
-      }
-    }
-    for (const row of rows) {
-      const mapped = nextPolicy?.stages.find((stage) => stage.id === row.destinationStageId);
-      const participants = (row.obligation.participants as Array<{ type: string; agentId: string | null; userId: string | null }>) ?? [];
-      const preserved = mapped && participants.every((expected) => mapped.participants.some((actual) =>
-        actual.type === expected.type && (actual.agentId ?? null) === (expected.agentId ?? null)
-          && (actual.userId ?? null) === (expected.userId ?? null)));
-      if (!preserved || mapped.participants.length !== participants.length) {
-        throw conflict("A transferred review stage cannot be removed or changed by a policy edit.", {
-          code: "review_transfer_stage_locked",
-          transferId: row.id,
-        });
-      }
-    }
+  if (canonicalReview(currentPolicy) !== canonicalReview(nextPolicy)) {
+    if (await manifestIsFrozen(tx, input.companyId, input.issueId)) throw manifestFrozen(input.issueId);
+    throw conflict("The review stages of a delivery with transferred reviews cannot change.", {
+      code: "review_transfer_stage_locked",
+      transferId: rows[0]!.id,
+    });
+  }
+}
+
+/**
+ * Called inside the issue delete transaction, after the issue row is locked.
+ * A transfer is retained audit evidence for both of its issues, so neither
+ * can be deleted while the transfer exists.
+ */
+export async function assertIssueDeletionKeepsTransfers(tx: Tx, input: { companyId: string; issueId: string }) {
+  const [retained] = await transfersTouching(tx, input.companyId, input.issueId);
+  if (retained) {
+    throw conflict("This task is part of a review transfer, which must be kept as evidence. It cannot be deleted.", {
+      code: "review_transfer_issue_retained",
+      transferId: retained.id,
+    });
   }
 }
 
