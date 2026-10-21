@@ -290,6 +290,21 @@ describeEmbeddedPostgres("issue review transfer manifest", () => {
         expect(edges.map((edge) => [edge.issueId, edge.relatedIssueId])).toEqual([[fixture.suiteId, fixture.parentId]]);
       });
 
+      it("rejects a source review edit after its transfer is satisfied", async () => {
+        const { fixture, transfer } = await frozenAfter(1);
+        const [row] = await db.select().from(issueReviewTransfers).where(eq(issueReviewTransfers.id, transfer.id));
+        expect(row!.status).toBe("satisfied");
+        const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        const changed = { ...fixture.sourceStage, participants: [{ type: "agent", agentId: fixture.builderId }] };
+        const response = await request(createApp())
+          .patch(`/api/issues/${fixture.sourceId}`)
+          .send({ executionPolicy: { mode: "normal", commentRequired: true, stages: [changed] } })
+          .expect(409);
+        expect(errorCode(response)).toBe("review_transfer_source_held");
+        const [after] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        expect(after!.executionPolicy).toEqual(source!.executionPolicy);
+      });
+
       it("rejects a stage configuration change after a bound approval", async () => {
         const { fixture } = await frozenAfter(1);
         const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));

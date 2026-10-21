@@ -17,11 +17,17 @@ import type {
   ExpectedReviewManifest,
   IssueExecutionPolicy,
   IssueExecutionStage,
+  IssueExecutionStagePrincipal,
   RequestIssueReviewTransfer,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
-import { normalizeIssueExecutionPolicy, parseIssueExecutionState } from "./issue-execution-policy.js";
+import {
+  isEscalatedReviewHold,
+  normalizeIssueExecutionPolicy,
+  parseIssueExecutionState,
+  principalsEqual,
+} from "./issue-execution-policy.js";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type DbOrTx = Db | Tx;
@@ -201,8 +207,8 @@ function assertUnchanged(issue: typeof issues.$inferSelect, expected: string, ro
  * decides escalation. Participant row ids are left out because policy
  * normalization may regenerate them.
  */
-function canonicalReview(policy: IssueExecutionPolicy | null, stageId?: string) {
-  const stages = policyStages(policy).filter((stage) => stageId === undefined || stage.id === stageId);
+function canonicalReview(policy: IssueExecutionPolicy | null) {
+  const stages = policyStages(policy);
   return JSON.stringify({
     maxReviewRounds: policy?.maxReviewRounds ?? null,
     stages: stages.map((stage) => ({
@@ -219,11 +225,10 @@ function canonicalReview(policy: IssueExecutionPolicy | null, stageId?: string) 
 }
 
 function samePrincipal(
-  a: { type: string; agentId?: string | null; userId?: string | null } | null | undefined,
-  b: { type: string; agentId?: string | null; userId?: string | null } | null | undefined,
+  a: IssueExecutionStagePrincipal | null | undefined,
+  b: IssueExecutionStagePrincipal | null | undefined,
 ) {
-  if (!a || !b) return !a && !b;
-  return a.type === b.type && (a.agentId ?? null) === (b.agentId ?? null) && (a.userId ?? null) === (b.userId ?? null);
+  return (!a && !b) || principalsEqual(a ?? null, b ?? null);
 }
 
 function copyStageForDestination(stage: IssueExecutionStage): IssueExecutionStage {
@@ -472,7 +477,7 @@ export function issueReviewTransferService(db: Db) {
       // An escalated review is held by a human outside the configured stage.
       // Copying the configured participants would hand it back to them.
       const currentParticipant = stageIsCurrent ? sourceState?.currentParticipant ?? null : null;
-      if (currentParticipant && !sourceStage.participants.some((participant) => samePrincipal(participant, currentParticipant))) {
+      if (isEscalatedReviewHold({ policy: sourcePolicy, stage: sourceStage, state: sourceState, currentParticipant })) {
         throw conflict("The source review is escalated to a reviewer outside its stage. That reviewer must decide it on the source task.", {
           code: "review_transfer_source_escalated",
           currentParticipant,
@@ -859,9 +864,11 @@ export async function assertIssueUpdateKeepsTransfers(
     if (heldSource && (input.nextStatus === "done" || input.nextStatus === "cancelled" || clears)) {
       throw sourceHeld(heldSource.id, heldSource.destinationIssueId);
     }
-    const changedStage = outgoing.find((row) =>
-      canonicalReview(currentPolicy, row.sourceStageId) !== canonicalReview(nextPolicy, row.sourceStageId));
-    if (changedStage) throw sourceHeld(changedStage.id, changedStage.destinationIssueId);
+    // Stage order, neighbouring stages and the round limit all shape the
+    // transferred obligation, so the whole review configuration is locked.
+    if (canonicalReview(currentPolicy) !== canonicalReview(nextPolicy)) {
+      throw sourceHeld(outgoing[0]!.id, outgoing[0]!.destinationIssueId);
+    }
     if (heldSource && input.nextExecutionState) {
       const before = parseIssueExecutionState(current?.executionState ?? null);
       const after = parseIssueExecutionState(input.nextExecutionState);
