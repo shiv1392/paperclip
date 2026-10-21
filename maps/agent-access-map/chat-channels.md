@@ -2,6 +2,8 @@
 
 Product map: [External chat and email conversations](../feature-map/chat-channels.md).
 
+Feature ID: `chat-channels`.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -12,6 +14,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `providers`
+
+Capability ID: `chat-channels/providers`.
 
 Review: `baseline`.
 
@@ -41,6 +45,8 @@ and the UI integration; live provider qualification is still separate.
 
 ## `identity`
 
+Capability ID: `chat-channels/identity`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -63,6 +69,8 @@ Gaps: Identity linking requires a signed-in board user, rollout admission and
 provider checks at the HTTP route. Native `call_api` preserves these permissions.
 
 ## `conversation`
+
+Capability ID: `chat-channels/conversation`.
 
 Review: `baseline`.
 
@@ -195,6 +203,8 @@ An existing conversation keeps its task binding. See
 
 ## `attachments`
 
+Capability ID: `chat-channels/attachments`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -220,6 +230,8 @@ Gaps: Uploading/registering is supported. Provider delivery status and board rep
 separate operations.
 
 ## `lifecycle`
+
+Capability ID: `chat-channels/lifecycle`.
 
 Review: `baseline`.
 

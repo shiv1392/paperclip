@@ -2,6 +2,8 @@
 
 Product map: [Dashboards, activity, and audit trails](../feature-map/activity.md).
 
+Feature ID: `activity`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -10,6 +12,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `overview`
+
+Capability ID: `activity/overview`.
 
 Review: `baseline`.
 
@@ -34,6 +38,8 @@ Gaps: Dashboard data is accessible; live-work rendering and event streaming are 
 surfaces.
 
 ## `activity`
+
+Capability ID: `activity/activity`.
 
 Review: `baseline`.
 
@@ -68,6 +74,8 @@ Gaps: Audit export and raw activity creation have extra restrictions; do not
 equate them with issue activity reading. Live sandbox access remains unverified.
 
 ## `runs`
+
+Capability ID: `activity/runs`.
 
 Review: `baseline`.
 
@@ -120,6 +128,8 @@ Live updated-bridge admission and useful incident diagnosis remain unverified.
 
 ## `routine-audit`
 
+Capability ID: `activity/routine-audit`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -144,6 +154,8 @@ changes.
 
 ## `timeline`
 
+Capability ID: `activity/timeline`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -166,6 +178,8 @@ remaining operations before qualifying the whole capability.
 Gaps: API exists; no dedicated timeline tool is necessary for this requirement.
 
 ## `agent-commentary`
+
+Capability ID: `activity/agent-commentary`.
 
 Review: `baseline`.
 

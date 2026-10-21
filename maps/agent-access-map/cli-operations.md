@@ -2,6 +2,8 @@
 
 Product map: [CLI, API clients, and local worktrees](../feature-map/cli-operations.md).
 
+Feature ID: `cli-operations`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -10,6 +12,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `context`
+
+Capability ID: `cli-operations/context`.
 
 Review: `baseline`.
 
@@ -33,6 +37,8 @@ Gaps: Local CLI configuration has no matching domain REST resource; explicitly c
 local operator configuration.
 
 ## `domain-commands`
+
+Capability ID: `cli-operations/domain-commands`.
 
 Review: `baseline`.
 
@@ -60,6 +66,8 @@ allowed to this agent.
 
 ## `outputs`
 
+Capability ID: `cli-operations/outputs`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -86,6 +94,8 @@ assertions.
 
 ## `run-controls`
 
+Capability ID: `cli-operations/run-controls`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -111,6 +121,8 @@ Gaps: Agent credentials can read eligible runs. Operator invocation/cancellation
 not be counted as ordinary agent access.
 
 ## `worktree-instances`
+
+Capability ID: `cli-operations/worktree-instances`.
 
 Review: `baseline`.
 

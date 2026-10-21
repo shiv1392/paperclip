@@ -13,6 +13,7 @@ import {
   toggleAllGitHubRepositoriesSchema,
   createAiConnectionSchema,
   updateDecisionModelSchema,
+  updatePromptInjectionPreventionSchema,
   updateAgentObservabilitySchema,
   agentObservabilityRevisionSchema,
   agentObservabilityCaptureSchema,
@@ -1388,6 +1389,10 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
+  "GET /api/companies/{companyId}/prompt-injection-prevention",
+  "PUT /api/companies/{companyId}/prompt-injection-prevention",
+  "GET /api/companies/{companyId}/prompt-injection-prevention/models",
+  "POST /api/companies/{companyId}/prompt-injection-prevention/test",
   "GET /api/companies/{companyId}/fast-response",
   "PUT /api/companies/{companyId}/fast-response",
   "GET /api/companies/{companyId}/fast-response/models",
@@ -11127,6 +11132,20 @@ registerCurrentRoute({
 });
 
 // --- Tool access -------------------------------------------------------------
+
+for (const [method, suffix, summary] of [
+  ["get", "", "Get prompt injection settings and eligible shared OpenRouter connections; non-managers receive no settings or choices"],
+  ["put", "", "Configure opt-in prompt injection model checks as a board connection manager"],
+  ["get", "/models", "List OpenRouter model suggestions for an authorized shared connection as a board connection manager"],
+  ["post", "/test", "Classify two fixed billed samples using saved settings as a board connection manager; fallback is not a passing model test"],
+] as const) registerCurrentRoute({
+  method, path: `/api/companies/{companyId}/prompt-injection-prevention${suffix}`,
+  tags: ["prompt-injection-prevention"], summary,
+  ...(method === "put" ? { body: updatePromptInjectionPreventionSchema } : {}),
+  ...(method === "post" ? { body: z.object({}).strict() } : {}),
+  ...(suffix === "/models" ? { query: z.object({ connectionId: z.string().uuid() }) } : {}),
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 422: r.unprocessable },
+});
 
 for (const [method, suffix, summary] of [
   ["get", "", "Get fast response settings and compatible shared API connections"],

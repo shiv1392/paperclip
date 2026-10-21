@@ -6,17 +6,19 @@ navigation: {"section":"Projects and execution","sectionOrder":40,"order":30}
 
 A project or task can use a managed workspace with inspectable files, Git state, services, and runtime controls. Operators can follow its lifecycle through provisioning, use, and closure.
 
+Feature ID: `workspaces`.
+
 Implementation: [workspace list](../../ui/src/pages/Workspaces.tsx), [execution workspace](../../ui/src/pages/ExecutionWorkspaceDetail.tsx), [project workspace](../../ui/src/pages/ProjectWorkspaceDetail.tsx).
 
 Agent access: [companion](../agent-access-map/workspaces.md).
 
 ## Sub-features
 
-- `binding`: identify the workspace actually bound to a task/run.
-- `provisioning`: observe readiness and failures instead of inferring readiness from a created record.
-- `services`: start/stop supported services and inspect logs and exposed endpoints.
-- `files-git`: inspect workspace files and repository state used for the deliverable.
-- `closure`: close/reopen or reconcile through permitted controls without losing work.
+- `binding`: `workspaces/binding` — identify the workspace actually bound to a task/run.
+- `provisioning`: `workspaces/provisioning` — observe readiness and failures instead of inferring readiness from a created record.
+- `services`: `workspaces/services` — start/stop supported services and inspect logs and exposed endpoints.
+- `files-git`: `workspaces/files-git` — inspect workspace files and repository state used for the deliverable.
+- `closure`: `workspaces/closure` — close/reopen or reconcile through permitted controls without losing work.
 
 For a historical failed export whose exact sandbox was destroyed, the task recovery
 notice offers **Continue from saved sources** to an authorized board operator.
@@ -156,6 +158,8 @@ Manual: Provision a disposable workspace, wait for readiness, start an available
 ### Storybook verification
 
 #### `closure`
+
+Capability ID: `workspaces/closure`.
 
 Scope: ui
 Storybook: Close-readiness checks, pending changes/active runs, blocked/pending/error close, retry close and eligible reopening.

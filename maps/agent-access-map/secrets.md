@@ -2,6 +2,8 @@
 
 Product map: [Secrets, personal credentials, and proposals](../feature-map/secrets.md).
 
+Feature ID: `secrets`.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -12,6 +14,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `company-secrets`
+
+Capability ID: `secrets/company-secrets`.
 
 Review: `baseline`.
 
@@ -39,6 +43,8 @@ is a separate scoped operation described under runtime-delivery.
 
 ## `user-secrets`
 
+Capability ID: `secrets/user-secrets`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -63,6 +69,8 @@ Gaps: Agent cannot edit a person's private credential value through their ordina
 key.
 
 ## `proposals`
+
+Capability ID: `secrets/proposals`.
 
 Review: `baseline`.
 
@@ -90,6 +98,8 @@ Native calls retain active-run, scope and skill-test JWT restrictions.
 
 ## `vault-import`
 
+Capability ID: `secrets/vault-import`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -114,6 +124,8 @@ Gaps: Vault import is not implied by having a secret binding or the ability to p
 secret.
 
 ## `runtime-delivery`
+
+Capability ID: `secrets/runtime-delivery`.
 
 Review: `baseline`.
 

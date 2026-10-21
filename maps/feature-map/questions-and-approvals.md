@@ -9,26 +9,28 @@ history. A question, plan confirmation, governance approval, and app-tool review
 can look similar but have different authority and continuation rules. Each
 decision must stay attached to its original request and survive reload.
 
+Feature ID: `questions-and-approvals`.
+
 Agent access: [companion](../agent-access-map/questions-and-approvals.md).
 
 ## Sub-features
 
-- `questions`: single-choice, multiple-choice, custom, and free-text answers;
+- `questions`: `questions-and-approvals/questions` — single-choice, multiple-choice, custom, and free-text answers;
   paged forms retain answers until submission and show validation failures.
-- `dismiss-and-reopen`: unanswered questions remain in the feed after dismissal
+- `dismiss-and-reopen`: `questions-and-approvals/dismiss-and-reopen` — unanswered questions remain in the feed after dismissal
   or a newer message; reopening restores the form without inventing an answer.
-- `confirmations`: accept, decline, or request changes; stale, expired, resolved,
+- `confirmations`: `questions-and-approvals/confirmations` — accept, decline, or request changes; stale, expired, resolved,
   and withdrawn requests cannot be acted on again.
-- `plan-review`: inspect the requested plan revision before accepting or asking
+- `plan-review`: `questions-and-approvals/plan-review` — inspect the requested plan revision before accepting or asking
   for changes. An ordinary planning task can proceed to execution; Agent Chat
   hands work to linked tasks and remains a conversation.
-- `audience`: the current actor, company, named audience, and review policy govern
+- `audience`: `questions-and-approvals/audience` — the current actor, company, named audience, and review policy govern
   resolution. A visible request is not necessarily actionable by that viewer.
-- `governance`: pending/history views, approve/reject, revision request, and
+- `governance`: `questions-and-approvals/governance` — pending/history views, approve/reject, revision request, and
   resubmission for formal board approvals.
-- `tool-review`: approve once, always allow the displayed scope, or decline;
+- `tool-review`: `questions-and-approvals/tool-review` — approve once, always allow the displayed scope, or decline;
   decision status and provider execution outcome remain distinct.
-- `continuation`: one recorded response leads to the eligible waiting run or
+- `continuation`: `questions-and-approvals/continuation` — one recorded response leads to the eligible waiting run or
   continuation; repeated clicks, reloads, and competing tabs do not repeat work.
 
 ## How to get to it (user POV)

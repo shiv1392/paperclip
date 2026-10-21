@@ -3260,6 +3260,41 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       await expect(gateway.executeTool({ sessionToken: session.token, tool: tool.name, parameters })).rejects.toThrow();
       expect(f.responseWrites).toHaveLength(writes);
     });
+    it("classifies recovered GitHub receipts without republishing or overwriting historical success", async () => {
+      const f = await publicationRetryFixture();
+      vi.stubGlobal("fetch", f.providerFetch);
+      onTestFinished(() => vi.unstubAllGlobals());
+      const { aiConnectionService } = await import("../services/ai-connections.js");
+      const { promptInjectionPreventionService } = await import("../services/prompt-injection-prevention.js");
+      const { promptInjectionInvocations } = await import("@paperclipai/db");
+      const binding = await aiConnectionService(db).save(f.companyId, "owner-user", { provider: "openrouter", method: "api_key",
+        name: "Classifier", ownership: "shared", apiKey: "fixture-key", allAgents: true, agentIds: [] }, "fixture-key");
+      await promptInjectionPreventionService(db).configure(f.companyId, "owner-user", { ...binding, enabled: true, model: "openai/gpt-oss-safeguard-20b" });
+      const provider = vi.fn().mockResolvedValue({ verdict: { violation: false, findings: [] }, receipt: {
+        inputTokens: 100, outputTokens: 10, costCents: "0.001", costStatus: "reported", providerRequestId: "fixture",
+        pricingProvenance: { source: "provider_reported" },
+      } });
+      await initializeRunIdentity(db, { companyId: f.companyId, runId: f.run.id, issueId: f.conversation.issueId!, responsibleUserId: null, cause: "company_default" });
+      const gateway = createToolGatewayService(db, { toolActionSigningSecret: "classifier-replay-test", promptInjectionProvider: provider });
+      const session = await gateway.createSession({ companyId: f.companyId, agentId: f.assignedAgentId, runId: f.run.id });
+      const tool = (await githubBotToolsForSession(db, f.session)).find(t => t.upstreamToolName === "submit_review")!;
+      await db.insert(toolPolicies).values({ companyId: f.companyId, name: "Approve publication", policyType: "require_approval", priority: 0, selectors: { catalogEntryId: tool.catalogEntryId! } });
+      const input = { sessionToken: session.token, tool: tool.name, parameters: f.assessment };
+      await expect(gateway.executeTool(input)).rejects.toMatchObject({ reasonCode: "approval_required" });
+      const [approval] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.companyId));
+      await gateway.approveActionRequest({ companyId: f.companyId, actionRequestId: approval.id, actor: { userId: "owner-user" } });
+      const writes = f.responseWrites.length;
+      const [before] = await db.select().from(toolInvocations).where(eq(toolInvocations.id, approval.invocationId));
+      expect(before.status).toBe("succeeded");
+      provider.mockResolvedValue({ ...(await provider.mock.results[0].value),
+        verdict: { violation: true, findings: ["instruction_hijack"] } });
+      await expect(gateway.executeTool(input)).rejects.toMatchObject({ reasonCode: "prompt_injection_blocked" });
+      expect(f.responseWrites).toHaveLength(writes); expect(f.responseComments.size).toBe(1);
+      expect((await db.select().from(toolInvocations).where(eq(toolInvocations.id, approval.invocationId)))[0]).toMatchObject({ status: "succeeded", resultHash: before.resultHash });
+      const classifications = await db.select().from(promptInjectionInvocations).where(eq(promptInjectionInvocations.companyId, f.companyId));
+      expect(classifications).toHaveLength(2); expect(classifications.map(c => c.violation)).toEqual([false, true]);
+      expect(classifications.every(c => c.toolInvocationId === approval.invocationId && c.costEventId)).toBe(true);
+    });
     it("reads pending GitHub receipts without dispatch and refuses a missing publication", async () => {
       const f = await publicationRetryFixture();
       let attempts = 0;

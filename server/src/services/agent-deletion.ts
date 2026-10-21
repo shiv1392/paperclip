@@ -13,6 +13,13 @@ export async function deleteAgentDependencies(tx: Db, companyId: string, id: str
   if (decisionHold) throw conflict("Wait for active decisions or resolve their unknown charges in Costs before deleting this agent", {
     code: "agent_decision_accounting_pending",
   });
+  const [classifierHold] = await tx.select({ id: budgetReservations.id }).from(budgetReservations).where(and(
+    eq(budgetReservations.companyId, companyId), eq(budgetReservations.agentId, id),
+    eq(budgetReservations.state, "held"), sql`${budgetReservations.promptInjectionInvocationId} is not null`,
+  )).limit(1);
+  if (classifierHold) throw conflict("Wait for active prompt injection checks or resolve their unknown charges in Costs before deleting this agent", {
+    code: "agent_prompt_injection_accounting_pending",
+  });
   await issueThreadInteractionService(tx).cancelPendingForDeletedAddressee(companyId, id);
   await tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id));
   await tx

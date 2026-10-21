@@ -6,17 +6,19 @@ navigation: {"section":"Tasks and conversations","sectionOrder":20,"order":30}
 
 People find work that needs their attention, distinguish unread activity from required decisions, archive handled items, and search across the company.
 
+Feature ID: `inbox-search`.
+
 Implementation: [inbox](../../ui/src/pages/Inbox.tsx), [decisions](../../ui/src/pages/WhatNeedsMe.tsx), [search](../../ui/src/pages/Search.tsx).
 
 Agent access: [companion](../agent-access-map/inbox-search.md).
 
 ## Sub-features
 
-- `views`: use Mine, Recent, Unread, Blocked, and broader task views.
-- `triage`: read or archive attention items without pretending the underlying task is complete.
-- `decisions`: open the source of a decision and act in the right context.
-- `search`: query company work and follow a result to its original record.
-- `toasts`: receive live task notifications only for personal participation or explicit mentions.
+- `views`: `inbox-search/views` — use Mine, Recent, Unread, Blocked, and broader task views.
+- `triage`: `inbox-search/triage` — read or archive attention items without pretending the underlying task is complete.
+- `decisions`: `inbox-search/decisions` — open the source of a decision and act in the right context.
+- `search`: `inbox-search/search` — query company work and follow a result to its original record.
+- `toasts`: `inbox-search/toasts` — receive live task notifications only for personal participation or explicit mentions.
 
 ## How to get to it (user POV)
 
@@ -116,12 +118,16 @@ after switching company/account to verify suppression and isolation.
 
 #### `views`
 
+Capability ID: `inbox-search/views`.
+
 Scope: ui
 Storybook: Mine/Recent/Unread/Blocked and broader task views; combined versus standalone host; loading/empty/error/filter states.
 Production: Use persisted personal participation/read data; verify scoped counts and list navigation/reload; automatic read cleanup must not create Mine membership.
 Sources: Source: [Inbox.tsx](../../ui/src/pages/Inbox.tsx), [Issues.tsx](../../ui/src/pages/Issues.tsx). Tests: [Inbox.test.tsx](../../ui/src/pages/Inbox.test.tsx), [Issues.test.tsx](../../ui/src/pages/Issues.test.tsx), [issues-service.test.ts](../../server/src/__tests__/issues-service.test.ts)
 
 #### `toasts`
+
+Capability ID: `inbox-search/toasts`.
 
 Scope: ui
 Storybook: Eligible live task toast, explicit mention, quiet unrelated event, own-action/visible-task suppression, dedupe and company/account switch.

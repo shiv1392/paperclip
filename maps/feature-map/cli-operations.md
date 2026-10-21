@@ -6,17 +6,19 @@ navigation: {"section":"Oversight and operation","sectionOrder":70,"order":50}
 
 Operators and agents can work through explicit CLI/API context, manage domain resources, inspect runs, and create isolated local worktree instances for development.
 
+Feature ID: `cli-operations`.
+
 Implementation: [command registry](../../cli/src/index.ts), [client context](../../cli/src/commands/client/context.ts), [worktree commands](../../cli/src/commands/worktree.ts).
 
 Agent access: [companion](../agent-access-map/cli-operations.md).
 
 ## Sub-features
 
-- `context`: choose instance/API base, profile, identity, and company explicitly.
-- `domain-commands`: read/write tasks, agents, projects, goals, approvals, routines, and other registered resources.
-- `outputs`: work with documents/assets/skills and inspect machine-readable results.
-- `run-controls`: invoke/inspect supported runs and observe actual outcomes.
-- `worktree-instances`: initialize, seed, diagnose, and clean up only an owned development instance.
+- `context`: `cli-operations/context` — choose instance/API base, profile, identity, and company explicitly.
+- `domain-commands`: `cli-operations/domain-commands` — read/write tasks, agents, projects, goals, approvals, routines, and other registered resources.
+- `outputs`: `cli-operations/outputs` — work with documents/assets/skills and inspect machine-readable results.
+- `run-controls`: `cli-operations/run-controls` — invoke/inspect supported runs and observe actual outcomes.
+- `worktree-instances`: `cli-operations/worktree-instances` — initialize, seed, diagnose, and clean up only an owned development instance.
 
 ## How to get to it (user POV)
 
@@ -69,12 +71,16 @@ Manual: Initialize an owned disposable worktree instance, inspect its printed pa
 
 #### `context`
 
+Capability ID: `cli-operations/context`.
+
 Scope: cli
 Storybook: No authored story required for CLI profile/context selection.
 Production: Verify selected API origin, identity and company, JSON output and invalid-token/wrong-company failures. A persona label is not authentication.
 Sources: Source: [context.ts](../../cli/src/commands/client/context.ts). Tests: [context.test.ts](../../cli/src/__tests__/context.test.ts), [http.test.ts](../../cli/src/__tests__/http.test.ts)
 
 #### `domain-commands`
+
+Capability ID: `cli-operations/domain-commands`.
 
 Scope: cli
 Storybook: No authored story required for command parsing and domain API execution; corresponding product UI keeps its own story needs.
@@ -83,6 +89,8 @@ Sources: Source: [index.ts](../../cli/src/index.ts), [issue.ts](../../cli/src/co
 
 #### `outputs`
 
+Capability ID: `cli-operations/outputs`.
+
 Scope: cli
 Storybook: No authored story required for CLI document/asset/skill IO or machine-readable output.
 Production: Assert payload/schema, exit code, written contents, authorization and file integrity. Open the resulting document/asset in the product for cross-surface acceptance.
@@ -90,12 +98,16 @@ Sources: Source: [issue.ts](../../cli/src/commands/client/issue.ts), [asset.ts](
 
 #### `run-controls`
 
+Capability ID: `cli-operations/run-controls`.
+
 Scope: cli
 Storybook: No authored story required for invoke/list/get/cancel/events/log command execution.
 Production: Assert the real run ID, event/log output and resulting state, eligible actor and cancellation denial. Printed success does not prove provider completion.
 Sources: Source: [run.ts](../../cli/src/commands/client/run.ts), [heartbeat-run.ts](../../cli/src/commands/heartbeat-run.ts). Tests: [operations-parity.test.ts](../../cli/src/__tests__/operations-parity.test.ts)
 
 #### `worktree-instances`
+
+Capability ID: `cli-operations/worktree-instances`.
 
 Scope: cli
 Storybook: No authored story required for worktree initialize/seed/repair/cleanup commands.

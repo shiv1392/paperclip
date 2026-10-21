@@ -2,6 +2,8 @@
 
 Product map: [Recovery](../feature-map/recovery.md).
 
+Feature ID: `recovery`.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -12,6 +14,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `diagnosis`
+
+Capability ID: `recovery/diagnosis`.
 
 Review: `baseline`.
 
@@ -69,6 +73,8 @@ prove successful recovery.
 
 ## `bounded-continuation`
 
+Capability ID: `recovery/bounded-continuation`.
+
 Controller recovery can restore the exact active turn's saved completion proposal
 before reconnecting its provider. It requires matching run/session/source/turn
 identity and subsequent provider termination. This adds no agent retry, completion,
@@ -113,6 +119,8 @@ authority. Real PostgreSQL regressions cover allowed and rejected bindings;
 revised live agent authorization and callback delivery remain `not-run`.
 
 ## `source-action`
+
+Capability ID: `recovery/source-action`.
 
 The recovery-actions read API includes settled execution reconciliation holds
 with an automatic `replay: blocked` receipt, as well as retained workspace holds.
@@ -176,6 +184,8 @@ live provider-stop proof.
 
 ## `exhaustion`
 
+Capability ID: `recovery/exhaustion`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -200,6 +210,8 @@ Gaps: Reading exhaustion is supported. Continuing past the recorded gate require
 specified owner/action.
 
 ## `workspace`
+
+Capability ID: `recovery/workspace`.
 
 Review: `baseline`.
 
@@ -264,6 +276,8 @@ proof through the finalization reconciler; agents cannot attest owner shutdown.
 
 ## `unknown-outcome`
 
+Capability ID: `recovery/unknown-outcome`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -287,6 +301,8 @@ Gaps: Uncertain-side-effect resolution is operator/source-specific; do not repla
 obtain apparent parity.
 
 ## `user-continuation`
+
+Capability ID: `recovery/user-continuation`.
 
 Review: `baseline`.
 
@@ -312,6 +328,8 @@ Gaps: Receiving the continuation is supported; impersonating a saved user messag
 retry control is not.
 
 ## `reconnect`
+
+Capability ID: `recovery/reconnect`.
 
 Review: `baseline`.
 

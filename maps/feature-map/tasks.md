@@ -6,17 +6,19 @@ navigation: {"section":"Tasks and conversations","sectionOrder":20,"order":10}
 
 People create, assign, organize, discuss, and finish tasks. A task retains its owner, project, priority, history, and outputs as it moves through the work lifecycle.
 
+Feature ID: `tasks`.
+
 Implementation: [new task](../../ui/src/components/NewIssueDialog.tsx), [task list](../../ui/src/pages/Issues.tsx), [task detail](../../ui/src/pages/IssueDetail.tsx).
 
 Agent access: [companion](../agent-access-map/tasks.md).
 
 ## Sub-features
 
-- `create`: capture a title/request with the intended agent, project, and attachments.
-- `organize`: filter, sort, group, and navigate tasks without losing the selected context.
-- `properties`: change status, priority, assignee, project, and relationships where authorized.
-- `discussion`: persist comments, references, and files on the task.
-- `completion`: distinguish backlog, active work, review, blocked, done, and cancelled outcomes.
+- `create`: `tasks/create` — capture a title/request with the intended agent, project, and attachments.
+- `organize`: `tasks/organize` — filter, sort, group, and navigate tasks without losing the selected context.
+- `properties`: `tasks/properties` — change status, priority, assignee, project, and relationships where authorized.
+- `discussion`: `tasks/discussion` — persist comments, references, and files on the task.
+- `completion`: `tasks/completion` — distinguish backlog, active work, review, blocked, done, and cancelled outcomes.
 
 ## How to get to it (user POV)
 
