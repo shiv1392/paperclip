@@ -6,7 +6,7 @@ import { forbidden, notFound } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, issueService } from "../services/index.js";
 import { issueReviewTransferService } from "../services/issue-review-transfer.js";
-import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 
 export function issueReviewTransferRoutes(db: Db) {
   const router = Router();
@@ -15,6 +15,7 @@ export function issueReviewTransferRoutes(db: Db) {
   const transfers = issueReviewTransferService(db);
 
   async function assertCanMutate(req: Request, issue: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>) {
+    if (!hasCompanyAccess(req, issue.companyId)) throw notFound("Issue not found");
     assertCompanyAccess(req, issue.companyId);
     const decision = await access.decide({
       actor: req.actor,

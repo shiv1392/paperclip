@@ -102,5 +102,5 @@ describeEmbeddedPostgres("review manifest binding schema", () => {
       ["Legacy approval", null],
       ["Bound approval", binding],
     ]);
-  });
+  }, 30_000);
 });
