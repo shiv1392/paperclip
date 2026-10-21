@@ -83,6 +83,91 @@ describeEmbeddedPostgres("issue review transfers", () => {
       }
     });
   });
+  describe("approval authority", () => {
+    type Fixture = Awaited<ReturnType<typeof seedDelivery>>;
+    async function setSide(fixture: Fixture, side: "source" | "destination", patch: Partial<typeof issues.$inferInsert>) {
+      const key = side === "source" ? "source" : "parent";
+      const [row] = await db.update(issues).set(patch).where(eq(issues.id, fixture[key].id)).returning();
+      fixture[key] = row!;
+    }
+    async function human(fixture: Fixture) {
+      const id = randomUUID();
+      await db.insert(authUsers).values({ id, name: "Operator", email: `${id}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+      await db.insert(companyMemberships).values({ companyId: fixture.companyId, principalType: "user", principalId: id, status: "active", membershipRole: "operator" });
+      return id;
+    }
+    const customControls = [
+      ["trust rules", { authorizationPolicy: { assignmentPolicy: { mode: "protected" } } }],
+      ["a quarantine review preset", { reviewPreset: { id: "low_trust_review", version: 1, rawOutputDisposition: "quarantine" } }],
+    ] as const;
+
+    it.each([
+      ["source", "human_only"], ["source", "not_creator"],
+      ["destination", "human_only"], ["destination", "not_creator"],
+    ] as const)("refuses a %s with the %s verdict rule without changing it", async (side, reviewPolicy) => {
+      const fixture = await seedDelivery();
+      await setSide(fixture, side, { reviewPolicy });
+      const response = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture)).expect(422);
+      expect(errorCode(response)).toBe("review_transfer_policy_unrepresentable");
+      await expectNothingChanged(fixture);
+    });
+
+    for (const side of ["source", "destination"] as const) {
+      it.each(customControls)(`refuses a ${side} with %s without dropping those controls`, async (_label, control) => {
+        const fixture = await seedDelivery();
+        const policy = side === "source" ? fixture.source.executionPolicy : fixture.parent.executionPolicy;
+        await setSide(fixture, side, { executionPolicy: { ...policy, ...control } });
+        const response = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`)
+          .send(transferBody(fixture)).expect(422);
+        expect(errorCode(response)).toBe("review_transfer_policy_unrepresentable");
+        await expectNothingChanged(fixture);
+      });
+
+      it(`locks the ${side}'s verdict rule after transfer`, async () => {
+        const fixture = await seedDelivery();
+        await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(transferBody(fixture)).expect(201);
+        const id = side === "source" ? fixture.sourceId : fixture.parentId;
+        const response = await request(createApp()).patch(`/api/issues/${id}`).send({ reviewPolicy: "human_only" }).expect(409);
+        expect(errorCode(response)).toBe("review_transfer_review_policy_locked");
+        const [row] = await db.select().from(issues).where(eq(issues.id, id));
+        expect(row!.reviewPolicy).toBeNull();
+      });
+
+      it(`keeps the ${side}'s escalation human immutable through the public API`, async () => {
+        const fixture = await seedDelivery();
+        const originalOwner = await human(fixture);
+        const newOwner = await human(fixture);
+        await setSide(fixture, "source", { responsibleUserId: originalOwner });
+        await setSide(fixture, "destination", { responsibleUserId: originalOwner });
+        await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(transferBody(fixture)).expect(201);
+        const id = side === "source" ? fixture.sourceId : fixture.parentId;
+        await request(createApp()).patch(`/api/issues/${id}`).send({ responsibleUserId: newOwner }).expect(200);
+        const [row] = await db.select().from(issues).where(eq(issues.id, id));
+        expect(row!.responsibleUserId).toBe(originalOwner);
+      });
+
+      it.each(customControls)(`locks later changes to the ${side}'s %s`, async (_label, control) => {
+        const fixture = await seedDelivery();
+        await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(transferBody(fixture)).expect(201);
+        const id = side === "source" ? fixture.sourceId : fixture.parentId;
+        const [before] = await db.select().from(issues).where(eq(issues.id, id));
+        await request(createApp()).patch(`/api/issues/${id}`).send({ executionPolicy: { ...before!.executionPolicy, ...control } }).expect(409);
+        const [after] = await db.select().from(issues).where(eq(issues.id, id));
+        expect(after!.executionPolicy).toEqual(before!.executionPolicy);
+      });
+
+      it(`allows equivalent ${side} verdict and escalation settings`, async () => {
+        const fixture = await seedDelivery();
+        const owner = await human(fixture);
+        await setSide(fixture, "source", { createdByUserId: owner, responsibleUserId: null });
+        await setSide(fixture, "destination", { createdByUserId: owner, responsibleUserId: null });
+        await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(transferBody(fixture)).expect(201);
+        const id = side === "source" ? fixture.sourceId : fixture.parentId;
+        await request(createApp()).patch(`/api/issues/${id}`).send({ reviewPolicy: "anyone", responsibleUserId: owner }).expect(200);
+      });
+    }
+  });
   it("moves a pending child review to its own held stage on the top-level delivery", async () => {
     const fixture = await seedDelivery();
 

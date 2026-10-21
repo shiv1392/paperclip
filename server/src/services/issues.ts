@@ -11178,13 +11178,14 @@ export function issueService(db: Db) {
           assertLegacyRunTaskOwnership(actorRun, receiptExisting);
         }
         if (patch.status === "done" || patch.status === "cancelled" || patch.executionPolicy !== undefined
-          || patch.executionState !== undefined) {
+          || patch.executionState !== undefined || patch.reviewPolicy !== undefined) {
           await assertIssueUpdateKeepsTransfers(tx, {
             companyId: existing.companyId,
             issueId: id,
             nextStatus: patch.status,
             nextExecutionPolicy: patch.executionPolicy,
             nextExecutionState: patch.executionState,
+            nextReviewPolicy: patch.reviewPolicy,
           });
         }
         if (actorAgentId && patch.status === "done") {
