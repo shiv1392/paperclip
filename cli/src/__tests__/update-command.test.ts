@@ -6,6 +6,13 @@ import { writeManagedShim, flipCurrentAtomic, initializeInstallStore, payloadPat
 import type { CommandRunner } from "../commands/install.js";
 import { compareVersions, detectInstallMode, resolveUpdateRequest, rollbackManagedInstall, updateCommand } from "../commands/update.js";
 
+// Tests without a restartActiveService override reach the default restart
+// path. Report no service manager so it never touches the host service.
+vi.mock("../services/service-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/service-manager.js")>()),
+  detectServiceManager: vi.fn(async () => ({ supported: false, reason: "service manager disabled in tests" })),
+}));
+
 let root: string;
 let previousHome: string | undefined;
 let previousPaperclipHome: string | undefined;

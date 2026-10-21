@@ -28,6 +28,16 @@ import {
 import { resolveCliVersion } from "../version.js";
 import { systemdServiceName } from "../services/service-manager.js";
 
+// Uninstall stops the background service before it validates the store. Every
+// test must inject a fake manager; the real detector fails loudly so no test
+// can reach the host's launchd/systemd service.
+vi.mock("../services/service-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/service-manager.js")>()),
+  detectServiceManager: vi.fn(async () => {
+    throw new Error("tests must inject detectServiceManager");
+  }),
+}));
+
 const ORIGINAL_ENV = { ...process.env };
 
 describe("managed install commands", () => {
@@ -345,7 +355,17 @@ describe("managed install commands", () => {
     fs.mkdirSync(paths.cliRoot, { recursive: true });
     fs.writeFileSync(unrelatedFile, "keep");
 
-    await expect(uninstallCommand()).rejects.toThrow("unverified install store");
+    const uninstallService = vi.fn(async () => undefined);
+    const detectServiceManager = vi.fn(async () => ({
+      supported: true as const,
+      manager: {
+        status: vi.fn(async () => ({ installed: true, active: true })),
+        uninstall: uninstallService,
+      } as never,
+    }));
+    await expect(uninstallCommand({ detectServiceManager })).rejects.toThrow("unverified install store");
+    expect(detectServiceManager).toHaveBeenCalledOnce();
+    expect(uninstallService).toHaveBeenCalledOnce();
     expect(fs.readFileSync(unrelatedFile, "utf8")).toBe("keep");
   });
 
@@ -367,7 +387,17 @@ describe("managed install commands", () => {
 
     await withInstallStoreLock(
       async () => {
-        await expect(uninstallCommand()).rejects.toThrow("already running");
+        const uninstallService = vi.fn(async () => undefined);
+        const detectServiceManager = vi.fn(async () => ({
+          supported: true as const,
+          manager: {
+            status: vi.fn(async () => ({ installed: true, active: true })),
+            uninstall: uninstallService,
+          } as never,
+        }));
+        await expect(uninstallCommand({ detectServiceManager })).rejects.toThrow("already running");
+        expect(detectServiceManager).toHaveBeenCalledOnce();
+        expect(uninstallService).toHaveBeenCalledOnce();
       },
       paths,
     );
