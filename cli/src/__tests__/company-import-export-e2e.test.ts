@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
@@ -158,6 +158,9 @@ function createServerEnv(
   env.HEARTBEAT_SCHEDULER_ENABLED = "false";
   env.PAPERCLIP_MIGRATION_AUTO_APPLY = "true";
   env.PAPERCLIP_UI_DEV_MIDDLEWARE = "false";
+  // Skip the run guard and doctor service probes, so the test never queries
+  // the host's launchd/systemd service.
+  env.PAPERCLIP_SERVICE_MANAGED = "1";
 
   return env;
 }
@@ -186,6 +189,20 @@ function collectTextFiles(root: string, current: string, files: Record<string, s
     const relativePath = path.relative(root, absolutePath).replace(/\\/g, "/");
     files[relativePath] = readFileSync(absolutePath, "utf8");
   }
+}
+
+// The server publishes runtime context bundles as read-only directories, which
+// a plain recursive rm cannot empty. Restore owner write access first.
+function removeTreeWithReadOnlyDirectories(root: string) {
+  const makeWritable = (directory: string) => {
+    chmodSync(directory, 0o700);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) makeWritable(path.join(directory, entry.name));
+    }
+  };
+  if (!existsSync(root)) return;
+  makeWritable(root);
+  rmSync(root, { recursive: true, force: true });
 }
 
 async function stopServerProcess(child: ServerProcess | null) {
@@ -330,7 +347,7 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
     await stopServerProcess(serverProcess);
     await tempDb?.cleanup();
     if (tempRoot) {
-      rmSync(tempRoot, { recursive: true, force: true });
+      removeTreeWithReadOnlyDirectories(tempRoot);
     }
   });
 
