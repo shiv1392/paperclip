@@ -1400,6 +1400,8 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "PUT /api/companies/{companyId}/observability",
   "DELETE /api/companies/{companyId}/observability",
   "POST /api/companies/{companyId}/observability/test",
+  "POST /api/issues/{id}/review-transfers",
+  "POST /api/review-transfers/{transferId}/receipts",
   ...browserUseOperations.map(([method, path]) => `${method.toUpperCase()} ${path}`),
   "GET /api/companies/{companyId}/ai-connections",
   "POST /api/companies/{companyId}/ai-connections",
@@ -4336,7 +4338,7 @@ registry.registerPath({
   tags: ["issues"],
   summary: "Delete an issue",
   request: { params: z.object({ id: z.string() }) },
-  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound, 409: r.conflict },
 });
 
 registry.registerPath({

@@ -501,6 +501,9 @@ describeEmbeddedPostgres("issue review transfers", () => {
       ["a changed round limit", (fixture: Awaited<ReturnType<typeof seedDelivery>>) => ({
         stages: [fixture.sourceStage], maxReviewRounds: 1,
       })],
+      ["a stage added before it", (fixture: Awaited<ReturnType<typeof seedDelivery>>) => ({
+        stages: [reviewStage(fixture.builderId), fixture.sourceStage],
+      })],
     ] as const)("refuses a source policy edit with %s", async (_label, policyFor) => {
       const fixture = await seedDelivery();
       const transfer = await transferAndReadParent(fixture);
