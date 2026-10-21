@@ -979,6 +979,122 @@ describeEmbeddedPostgres("issue review transfers", () => {
     });
   });
 
+  describe("retained obligations", () => {
+    async function expectTransferIntact(fixture: Awaited<ReturnType<typeof seedDelivery>>, transferId: string) {
+      const [row] = await db.select().from(issueReviewTransfers).where(eq(issueReviewTransfers.id, transferId));
+      expect(row).toMatchObject({ status: "held", sourceIssueId: fixture.sourceId, destinationIssueId: fixture.parentId });
+      const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      expect(source!.executionState).toEqual(fixture.source.executionState);
+      expect((parent!.executionPolicy as { stages: Array<{ id: string }> }).stages.map((stage) => stage.id))
+        .toEqual([row!.destinationStageId, fixture.parentGate.id]);
+    }
+
+    it.each(["source", "destination"] as const)("refuses to delete the %s of a transfer and keeps its obligation", async (role) => {
+      const fixture = await seedDelivery();
+      const transfer = await transferAndReadParent(fixture);
+      const response = await request(createApp())
+        .delete(`/api/issues/${role === "source" ? fixture.sourceId : fixture.parentId}`)
+        .expect(409);
+      expect(errorCode(response)).toBe("review_transfer_issue_retained");
+      await expectTransferIntact(fixture, transfer.id);
+    });
+
+    it("refuses to transfer a source review escalated to a human outside its stage", async () => {
+      const fixture = await seedDelivery();
+      const escalatedState = {
+        ...(fixture.source.executionState as Record<string, unknown>),
+        currentParticipant: { type: "user", agentId: null, userId: "escalation-owner" },
+        changesRequestedCount: 3,
+      };
+      await db.update(issues).set({ executionState: escalatedState, assigneeAgentId: null, assigneeUserId: "escalation-owner" })
+        .where(eq(issues.id, fixture.sourceId));
+      const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      const response = await request(createApp())
+        .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture, { expectedSourceUpdatedAt: source!.updatedAt.toISOString() }))
+        .expect(409);
+      expect(errorCode(response)).toBe("review_transfer_source_escalated");
+      expect(await db.select().from(issueReviewTransfers)).toHaveLength(0);
+      const [after] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(after!.executionState).toEqual(escalatedState);
+      expect(after!.assigneeUserId).toBe("escalation-owner");
+    });
+
+    it.each([
+      ["a changed reviewer", (fixture: Awaited<ReturnType<typeof seedDelivery>>) => ({
+        stages: [{ ...fixture.sourceStage, participants: [{ type: "agent", agentId: fixture.builderId }] }],
+      })],
+      ["a changed round limit", (fixture: Awaited<ReturnType<typeof seedDelivery>>) => ({
+        stages: [fixture.sourceStage], maxReviewRounds: 1,
+      })],
+    ] as const)("refuses a source policy edit with %s", async (_label, policyFor) => {
+      const fixture = await seedDelivery();
+      const transfer = await transferAndReadParent(fixture);
+      const response = await request(createApp())
+        .patch(`/api/issues/${fixture.sourceId}`)
+        .send({ executionPolicy: { mode: "normal", commentRequired: true, ...policyFor(fixture) } })
+        .expect(409);
+      expect(errorCode(response)).toBe("review_transfer_source_held");
+      const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+      expect(source!.executionPolicy).toEqual(fixture.source.executionPolicy);
+      await expectTransferIntact(fixture, transfer.id);
+    });
+
+    it.each([
+      ["the existing gate's reviewer", (fixture: Awaited<ReturnType<typeof seedDelivery>>, stages: any[]) => ({
+        stages: [stages[0], { ...fixture.parentGate, participants: [{ type: "agent", agentId: fixture.builderId }] }],
+      })],
+      ["an added stage", (fixture: Awaited<ReturnType<typeof seedDelivery>>, stages: any[]) => ({
+        stages: [...stages, reviewStage(fixture.builderId)],
+      })],
+      ["the round limit", (_fixture: Awaited<ReturnType<typeof seedDelivery>>, stages: any[]) => ({
+        stages, maxReviewRounds: 1,
+      })],
+    ] as const)("refuses a delivery policy edit to %s before any approval", async (_label, policyFor) => {
+      const fixture = await seedDelivery();
+      const transfer = await transferAndReadParent(fixture);
+      const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      const stages = (parent!.executionPolicy as { stages: any[] }).stages;
+      const response = await request(createApp())
+        .patch(`/api/issues/${fixture.parentId}`)
+        .send({ executionPolicy: { mode: "normal", commentRequired: true, ...policyFor(fixture, stages) } })
+        .expect(409);
+      expect(errorCode(response)).toBe("review_transfer_stage_locked");
+      const [after] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+      expect(after!.executionPolicy).toEqual(parent!.executionPolicy);
+      await expectTransferIntact(fixture, transfer.id);
+    });
+
+    it.each(["source", "destination"] as const)("keeps one coherent outcome when a %s policy edit races the transfer", async (role) => {
+      const fixture = await seedDelivery();
+      const issueId = role === "source" ? fixture.sourceId : fixture.parentId;
+      const original = role === "source" ? fixture.sourceStage : fixture.parentGate;
+      const changed = { ...original, participants: [{ type: "agent", agentId: fixture.builderId }] };
+      const [transfer, edit] = await Promise.all([
+        request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(transferBody(fixture)),
+        request(createApp()).patch(`/api/issues/${issueId}`)
+          .send({ executionPolicy: { mode: "normal", commentRequired: true, stages: [changed] } }),
+      ]);
+      const rows = await db.select().from(issueReviewTransfers);
+      const [after] = await db.select().from(issues).where(eq(issues.id, issueId));
+      const stages = (after!.executionPolicy as { stages: Array<{ id: string; participants: Array<{ agentId: string | null }> }> }).stages;
+      const stage = stages.find((candidate) => candidate.id === original.id)!;
+      if (transfer.status === 201) {
+        // Transfer committed first: the edit must not have changed the held configuration.
+        expect(edit.status).toBe(409);
+        expect(rows).toHaveLength(1);
+        expect(stage.participants.map((participant) => participant.agentId)).toEqual([fixture.reviewerId]);
+      } else {
+        // Edit committed first: the transfer saw stale evidence and changed nothing.
+        expect(edit.status).toBe(200);
+        expect(errorCode(transfer)).toBe("review_transfer_stale");
+        expect(rows).toHaveLength(0);
+        expect(stage.participants.map((participant) => participant.agentId)).toEqual([fixture.builderId]);
+      }
+    });
+  });
+
   describe("source dispatch hold", () => {
     async function heldFixture() {
       const fixture = await seedDelivery();

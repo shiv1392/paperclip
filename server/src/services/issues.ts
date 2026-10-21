@@ -155,7 +155,7 @@ import {
   authorizeNativeChatReviewPresentation,
   retryNativeChatReviewPresentation,
 } from "./native-runtime/native-chat-review-presentation.js";
-import { assertIssueUpdateKeepsTransfers } from "./issue-review-transfer.js";
+import { assertIssueDeletionKeepsTransfers, assertIssueUpdateKeepsTransfers } from "./issue-review-transfer.js";
 import {
   applyIssueExecutionPolicyTransition,
   buildInitialIssueMonitorFields,
@@ -11178,13 +11178,13 @@ export function issueService(db: Db) {
           assertLegacyRunTaskOwnership(actorRun, receiptExisting);
         }
         if (patch.status === "done" || patch.status === "cancelled" || patch.executionPolicy !== undefined
-          || patch.executionState === null) {
+          || patch.executionState !== undefined) {
           await assertIssueUpdateKeepsTransfers(tx, {
             companyId: existing.companyId,
             issueId: id,
             nextStatus: patch.status,
             nextExecutionPolicy: patch.executionPolicy,
-            clearsExecutionState: patch.executionState === null && existing.executionState !== null,
+            nextExecutionState: patch.executionState,
           });
         }
         if (actorAgentId && patch.status === "done") {
@@ -11652,6 +11652,13 @@ export function issueService(db: Db) {
           .select({ documentId: issueDocuments.documentId })
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
+
+        const [locked] = await tx
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, id))
+          .for("update");
+        if (locked) await assertIssueDeletionKeepsTransfers(tx, { companyId: locked.companyId, issueId: id });
 
         let removedIssue;
         try {
