@@ -3,6 +3,8 @@
 Product map: [Navigation, profile, and
 announcements](../feature-map/navigation-preferences.md).
 
+Feature ID: `navigation-preferences`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -11,6 +13,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `navigation`
+
+Capability ID: `navigation-preferences/navigation`.
 
 Review: `baseline`.
 
@@ -38,6 +42,8 @@ needs its own identity policy.
 
 ## `preferences`
 
+Capability ID: `navigation-preferences/preferences`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -62,6 +68,8 @@ Gaps: Catalog metadata says board_or_agent, but requireBoardUserId rejects agent
 Collapse is in-memory; global collapse is disabled.
 
 ## `profile`
+
+Capability ID: `navigation-preferences/profile`.
 
 Review: `baseline`.
 
@@ -90,6 +98,8 @@ distinct permission paths.
 
 ## `announcements`
 
+Capability ID: `navigation-preferences/announcements`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -113,6 +123,8 @@ own policy and access review.
 Gaps: User-specific instance-wide dismissal has no agent delegation path today.
 
 ## `fallbacks`
+
+Capability ID: `navigation-preferences/fallbacks`.
 
 Review: `baseline`.
 

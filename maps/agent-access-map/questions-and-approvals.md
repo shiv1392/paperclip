@@ -2,6 +2,8 @@
 
 Product map: [Questions and approvals](../feature-map/questions-and-approvals.md).
 
+Feature ID: `questions-and-approvals`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -10,6 +12,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `questions`
+
+Capability ID: `questions-and-approvals/questions`.
 
 Review: `baseline`.
 
@@ -37,6 +41,8 @@ resolver policy.
 
 ## `dismiss-and-reopen`
 
+Capability ID: `questions-and-approvals/dismiss-and-reopen`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -59,6 +65,8 @@ Gaps: Presentation dismissal/reopening does not resolve the question and does no
 require a new mutation API.
 
 ## `confirmations`
+
+Capability ID: `questions-and-approvals/confirmations`.
 
 Review: `baseline`.
 
@@ -86,6 +94,8 @@ acceptance/response controls remain restricted.
 
 ## `plan-review`
 
+Capability ID: `questions-and-approvals/plan-review`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -112,6 +122,8 @@ capability.
 
 ## `audience`
 
+Capability ID: `questions-and-approvals/audience`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -136,6 +148,8 @@ Gaps: Audience is a permission boundary to test, not an endpoint that creates ne
 authority.
 
 ## `governance`
+
+Capability ID: `questions-and-approvals/governance`.
 
 Review: `baseline`.
 
@@ -163,6 +177,8 @@ Preserve explicit approver authority.
 
 ## `tool-review`
 
+Capability ID: `questions-and-approvals/tool-review`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -187,6 +203,8 @@ Gaps: The request/continuation path exists. Agent cannot grant itself once/alway
 scope via generic API.
 
 ## `continuation`
+
+Capability ID: `questions-and-approvals/continuation`.
 
 Review: `baseline`.
 

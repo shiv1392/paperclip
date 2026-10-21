@@ -2,6 +2,8 @@
 
 Product map: [Inbox, decisions, and search](../feature-map/inbox-search.md).
 
+Feature ID: `inbox-search`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -10,6 +12,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `views`
+
+Capability ID: `inbox-search/views`.
 
 The issue-list API accepts optional `includeAgentCreatedTasks`; false restricts
 independent results to human creation before search/pagination. Omission retains
@@ -54,6 +58,8 @@ is a separate user-only surface.
 
 ## `triage`
 
+Capability ID: `inbox-search/triage`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -79,6 +85,8 @@ does not have equivalent agent semantics everywhere.
 
 ## `decisions`
 
+Capability ID: `inbox-search/decisions`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -103,6 +111,8 @@ Gaps: Queue browsing/managing may be allowed; governed approval decisions still 
 separate board/resolver boundaries.
 
 ## `search`
+
+Capability ID: `inbox-search/search`.
 
 Review: `baseline`.
 
@@ -130,6 +140,8 @@ the appropriate one.
 
 
 ## `toasts`
+
+Capability ID: `inbox-search/toasts`.
 
 Review: `baseline`.
 

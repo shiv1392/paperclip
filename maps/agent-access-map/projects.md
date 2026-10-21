@@ -2,6 +2,8 @@
 
 Product map: [Projects and repositories](../feature-map/projects.md).
 
+Feature ID: `projects`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -10,6 +12,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `lifecycle`
+
+Capability ID: `projects/lifecycle`.
 
 Review: `baseline`.
 
@@ -37,6 +41,8 @@ still apply.
 
 ## `task-context`
 
+Capability ID: `projects/task-context`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -61,6 +67,8 @@ Gaps: Use explicit project context; task creation, assignment, and execution rem
 separate checks.
 
 ## `repositories`
+
+Capability ID: `projects/repositories`.
 
 Review: `baseline`.
 
@@ -87,6 +95,8 @@ Gaps: Authorized initial selection works. Replacement of repositories on an exis
 project hard-requires board and needs a delegation decision.
 
 ## `defaults`
+
+Capability ID: `projects/defaults`.
 
 Review: `baseline`.
 

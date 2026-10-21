@@ -6,16 +6,18 @@ navigation: {"section":"Projects and execution","sectionOrder":40,"order":10}
 
 People group tasks into projects, attach goals and repositories, and configure the context and defaults used by project work.
 
+Feature ID: `projects`.
+
 Implementation: [project list](../../ui/src/pages/Projects.tsx), [project detail](../../ui/src/pages/ProjectDetail.tsx).
 
 Agent access: [companion](../agent-access-map/projects.md).
 
 ## Sub-features
 
-- `lifecycle`: create, name, organize, and archive projects.
-- `task-context`: inspect project tasks and create work in the selected project.
-- `repositories`: configure repository/workspace sources and verify usable checkouts.
-- `defaults`: maintain project instructions, environment, goal, and budget context where offered.
+- `lifecycle`: `projects/lifecycle` — create, name, organize, and archive projects.
+- `task-context`: `projects/task-context` — inspect project tasks and create work in the selected project.
+- `repositories`: `projects/repositories` — configure repository/workspace sources and verify usable checkouts.
+- `defaults`: `projects/defaults` — maintain project instructions, environment, goal, and budget context where offered.
 
 ## How to get to it (user POV)
 

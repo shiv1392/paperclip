@@ -6,16 +6,18 @@ navigation: {"section":"Automation and structured work","sectionOrder":60,"order
 
 The cases experiment exposes structured records with types, fields, parent/child relationships, activity, revisions, and related task work.
 
+Feature ID: `cases`.
+
 Implementation: [case list](../../ui/src/pages/Cases.tsx), [case detail](../../ui/src/pages/CaseDetail.tsx).
 
 Agent access: [companion](../agent-access-map/cases.md).
 
 ## Sub-features
 
-- `browse`: search, filter, sort, group, and navigate case records.
-- `structure`: inspect fields and parent/child relationships without losing matching descendants.
-- `history`: inspect revisions and activity for a record.
-- `task-links`: follow work associated with a case in both directions.
+- `browse`: `cases/browse` — search, filter, sort, group, and navigate case records.
+- `structure`: `cases/structure` — inspect fields and parent/child relationships without losing matching descendants.
+- `history`: `cases/history` — inspect revisions and activity for a record.
+- `task-links`: `cases/task-links` — follow work associated with a case in both directions.
 
 ## How to get to it (user POV)
 
@@ -57,12 +59,16 @@ Verify cross-company and invalid changes fail clearly.
 
 #### `browse`
 
+Capability ID: `cases/browse`.
+
 Scope: ui
 Storybook: Mount Cases search/filter/sort/group/tree, matched-child parent context, persisted view choices, keyboard navigation and empty/loading/error.
 Production: GET /companies/{id}/cases scope/filter behavior is production evidence; rendered fixtures establish presentation only. Mutation/permission scenarios need real API checks separately.
 Sources: Source: [Cases.tsx](../../ui/src/pages/Cases.tsx), [cases.ts](../../server/src/routes/cases.ts). Tests: [Cases.test.tsx](../../ui/src/pages/Cases.test.tsx), [cases-routes.test.ts](../../server/src/__tests__/cases-routes.test.ts)
 
 #### `structure`
+
+Capability ID: `cases/structure`.
 
 Scope: ui
 Storybook: Mount CaseDetail and CaseFieldsPanel with arbitrary JSON fields and parent/children, matching descendants and unavailable child. Do not invent a general field editor or typed field validation.
@@ -71,12 +77,16 @@ Sources: Source: [CaseDetail.tsx](../../ui/src/pages/CaseDetail.tsx), [CaseField
 
 #### `history`
 
+Capability ID: `cases/history`.
+
 Scope: ui
 Storybook: Mount CaseDetail activity and document revisions as distinct views, empty/loading/errors, attribution and source links.
 Production: GET /cases/{id}/events and /cases/{id}/documents/{key}/revisions require company/access filtering; a fixture list does not establish durable revision creation or restoration.
 Sources: Source: [CaseDetail.tsx](../../ui/src/pages/CaseDetail.tsx), [cases.ts](../../server/src/routes/cases.ts). Tests: [CaseDetail.test.tsx](../../ui/src/pages/CaseDetail.test.tsx), [cases-routes.test.ts](../../server/src/__tests__/cases-routes.test.ts)
 
 #### `task-links`
+
+Capability ID: `cases/task-links`.
 
 Scope: ui
 Storybook: Mount CaseDetail and IssueCasesPanel related-task/case links in both directions, missing links and unavailable targets.

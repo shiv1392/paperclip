@@ -3,6 +3,8 @@
 Product map: [Installation, configuration, updates, and
 backups](../feature-map/instance-operations.md).
 
+Feature ID: `instance-operations`.
+
 Review date: 2026-10-12. Source commit: `f981fa3cc10cb8663a87dec60345fbff46d54d0a`.
 
 This is a source-reviewed baseline of representative operations and known gaps.
@@ -11,6 +13,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `install-update`
+
+Capability ID: `instance-operations/install-update`.
 
 Review: `baseline`.
 
@@ -33,6 +37,8 @@ Gaps: No uniform company REST updater API. Treat pre-start installation as an op
 exception or design an explicit delegated operator API.
 
 ## `server-service`
+
+Capability ID: `instance-operations/server-service`.
 
 Review: `baseline`.
 
@@ -57,6 +63,8 @@ Gaps: Instance start/stop and task workspace start/stop are different capabiliti
 Local service control is not agent company authority.
 
 ## `configuration`
+
+Capability ID: `instance-operations/configuration`.
 
 Review: `baseline`.
 
@@ -106,6 +114,8 @@ no live Cloud or agent-credential verification is claimed.
 
 ## `diagnostics`
 
+Capability ID: `instance-operations/diagnostics`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -137,6 +147,8 @@ Gaps: Health is an API; full local doctor/repair inspects host configuration and
 equivalent to that response.
 
 ## `backup`
+
+Capability ID: `instance-operations/backup`.
 
 Review: `baseline`.
 

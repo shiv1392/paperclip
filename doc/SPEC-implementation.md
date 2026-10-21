@@ -2370,3 +2370,8 @@ Pipelines, its review queue and learnings, stage automation, REST API, CLI comma
 and experimental setting are removed. Existing database tables and records remain
 for data preservation; there is no migration that drops or rewrites them. The
 independent Cases and Routines features remain available.
+
+Company-managed [Prompt Injection Prevention](prompt-injection-prevention.md)
+optionally classifies existing tool-result boundaries through a shared OpenRouter
+connection. Settings → Connections is permanent; valid model verdicts take
+precedence and dependency failures use the original built-in detector.

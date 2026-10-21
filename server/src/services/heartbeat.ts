@@ -1,3 +1,4 @@
+import { promptInjectionPreventionService } from "./prompt-injection-prevention.js";
 import { createHeartbeatAgentStatus } from "./heartbeat/agent-status.js";
 import { heartbeatExternalProvider, nativeRuntimeHasInstructionFilesystem } from "./heartbeat/external-provider.js";
 import { dotRunnerBroker } from "./dot-runner-broker.js";
@@ -4044,6 +4045,7 @@ export function heartbeatService(
     reconcileTaskWatchdogs,
     reconcileCostAccounting: async () => {
       await decisionModelService(db, { budgetHooks }).recoverInterrupted();
+      await promptInjectionPreventionService(db, { budgetHooks }).recoverInterrupted();
       return createCostAccountingReconciler(db, budgetHooks)();
     },
 

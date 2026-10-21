@@ -9,19 +9,21 @@ continuation is available. Recovery retains task context and ownership, honors
 pause and budget gates, and distinguishes confirmed failure from an uncertain
 external outcome. A retry acknowledgement alone is not proof that work resumed.
 
+Feature ID: `recovery`.
+
 Agent access: [companion](../agent-access-map/recovery.md).
 
 ## Sub-features
 
-- `diagnosis`: a task/run exposes the recorded cause, evidence, owner, attempt
+- `diagnosis`: `recovery/diagnosis` — a task/run exposes the recorded cause, evidence, owner, attempt
   progress, and next action without requiring a raw-log interpretation.
-- `bounded-continuation`: supported interrupted work continues with preserved
+- `bounded-continuation`: `recovery/bounded-continuation` — supported interrupted work continues with preserved
   conversation context and bounded attempts, without blindly replaying tools.
-- `source-action`: source-scoped recovery actions remain attached to the task;
+- `source-action`: `recovery/source-action` — source-scoped recovery actions remain attached to the task;
   independent repair work may have its own issue and return owner.
-- `exhaustion`: exhausted or overdue recovery exposes the current gate and
+- `exhaustion`: `recovery/exhaustion` — exhausted or overdue recovery exposes the current gate and
   permitted operator action; it does not claim an automatic path is still live.
-- `workspace`: workspace divergence/export failures show the applicable repair,
+- `workspace`: `recovery/workspace` — workspace divergence/export failures show the applicable repair,
   reconcile, or isolated reissue action with evidence and authority checks.
   Retained-file recovery runs in the harness with observed task progress and a
   Retry recovery action only after transient failures. It preserves newer files,
@@ -30,11 +32,11 @@ Agent access: [companion](../agent-access-map/recovery.md).
   workspace link when the destination is disabled. Local PostgreSQL and real
   filesystem regressions cover native and legacy recovery and one-time delivery;
   hosted provider recovery remains separate acceptance.
-- `unknown-outcome`: uncertain external side effects require inspection and
+- `unknown-outcome`: `recovery/unknown-outcome` — uncertain external side effects require inspection and
   an explicit decision, not automatic replay.
-- `user-continuation`: saved user messages after a stop are reconsidered once
+- `user-continuation`: `recovery/user-continuation` — saved user messages after a stop are reconsidered once
   cleanup proves the old execution is stopped; duplicate wakes are avoided.
-- `reconnect`: browser stream recovery refreshes persisted state without claiming
+- `reconnect`: `recovery/reconnect` — browser stream recovery refreshes persisted state without claiming
   the agent itself restarted or that a failed run succeeded.
 
 ## How to get to it (user POV)
@@ -311,6 +313,8 @@ only. Separately inspect the underlying execution if it is still stuck.
 
 #### `exhaustion`
 
+Capability ID: `recovery/exhaustion`.
+
 Scope: ui
 Storybook: Exhausted/overdue attempts, operator retry pending/error, blocked authority/gate and specific escalation.
 Production: Inspect durable attempt bounds and actual eligible retry/repair; acknowledgment alone does not prove continued execution.
@@ -318,12 +322,16 @@ Sources: Source: [IssueRecoveryActionCard.tsx](../../ui/src/components/IssueReco
 
 #### `unknown-outcome`
 
+Capability ID: `recovery/unknown-outcome`.
+
 Scope: ui
 Storybook: Uncertain external outcome, required inspection/evidence and explicit permitted operator decision.
 Production: Corroborate provider outcome before authorization; enforce no automatic external side-effect replay and reject stale/unauthorized decisions.
 Sources: Source: [IssueRecoveryActionCard.tsx](../../ui/src/components/IssueRecoveryActionCard.tsx), [issue-recovery-actions.ts](../../server/src/services/issue-recovery-actions.ts). Tests: [IssueRecoveryActionCard.test.tsx](../../ui/src/components/IssueRecoveryActionCard.test.tsx), [issue-recovery-actions.test.ts](../../server/src/__tests__/issue-recovery-actions.test.ts), [recovery.spec.ts](../../tests/e2e/execution-recovery/recovery.spec.ts)
 
 #### `user-continuation`
+
+Capability ID: `recovery/user-continuation`.
 
 Scope: ui
 Storybook: Saved follow-up waiting on stop cleanup, pause/budget gate, one eligible continuation and result/failure.

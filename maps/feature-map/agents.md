@@ -6,20 +6,22 @@ navigation: {"section":"Agents and reusable capabilities","sectionOrder":30,"ord
 
 Operators hire agents, configure their identity and instructions, assign reporting relationships, and manage their lifecycle. Built-in agents have their own setup and lifecycle constraints.
 
+Feature ID: `agents`.
+
 Implementation: [hiring](../../ui/src/pages/NewAgent.tsx), [configuration](../../ui/src/components/AgentConfigForm.tsx), [organization](../../ui/src/pages/OrgChart.tsx).
 
 Agent access: [companion](../agent-access-map/agents.md).
 
 ## Sub-features
 
-- `hire`: choose identity, harness, model, and required account settings; edit
+- `hire`: `agents/hire` — choose identity, harness, model, and required account settings; edit
   reporting relationships through the agent configuration afterward.
-- `grok-bot`: experimental existing-Bot agent setup through remote OAuth, routine credentials, and an authenticated two-way challenge; current contact, stop and explicit recovery.
-- `instructions`: edit agent configuration and instruction files with durable revisions.
-- `organization`: inspect and change reporting relationships through supported controls.
-- `primary-agent`: choose a personal primary agent for the company, confirm replacement, and inspect its roster/sidebar and task/chat defaults.
-- `lifecycle`: pause/resume or retire an agent while preserving history.
-- `built-in`: configure required agents without treating them as ordinary removable hires.
+- `grok-bot`: `agents/grok-bot` — experimental existing-Bot agent setup through remote OAuth, routine credentials, and an authenticated two-way challenge; current contact, stop and explicit recovery.
+- `instructions`: `agents/instructions` — edit agent configuration and instruction files with durable revisions.
+- `organization`: `agents/organization` — inspect and change reporting relationships through supported controls.
+- `primary-agent`: `agents/primary-agent` — choose a personal primary agent for the company, confirm replacement, and inspect its roster/sidebar and task/chat defaults.
+- `lifecycle`: `agents/lifecycle` — pause/resume or retire an agent while preserving history.
+- `built-in`: `agents/built-in` — configure required agents without treating them as ordinary removable hires.
 
 ## How to get to it (user POV)
 

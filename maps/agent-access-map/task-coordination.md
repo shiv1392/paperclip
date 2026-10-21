@@ -3,6 +3,8 @@
 Product map: [Delegation, dependencies, and
 signoff](../feature-map/task-coordination.md).
 
+Feature ID: `task-coordination`.
+
 Review date: 2026-10-12. Source commit: `58e16dbddfc9c8d0cf60867f9d9847f0feda055b`.
 Native REST transport reconciled in this change; see the
 [shared transport contract](README.md#native-rest-transport).
@@ -13,6 +15,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `delegation`
+
+Capability ID: `task-coordination/delegation`.
 
 Review: `baseline`.
 
@@ -39,6 +43,8 @@ protected task/resource policy.
 
 ## `dependencies`
 
+Capability ID: `task-coordination/dependencies`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -64,6 +70,8 @@ Gaps: Dedicated set_dependencies is current-task scoped. Generic `call_api`
 forwards blockedByIssueIds to the REST route and retains its ownership checks.
 
 ## `signoff`
+
+Capability ID: `task-coordination/signoff`.
 
 Review: `baseline`.
 
@@ -103,6 +111,8 @@ board UI, comments and recovery actions do not send the binding, so they cannot 
 delivery with transfers (fail-closed 422).
 
 ## `tree-control`
+
+Capability ID: `task-coordination/tree-control`.
 
 Review: `baseline`.
 

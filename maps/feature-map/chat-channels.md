@@ -6,17 +6,19 @@ navigation: {"section":"Apps, channels, and extensions","sectionOrder":50,"order
 
 People can talk to an assigned agent through configured external channels, bind their identity, exchange files, and inspect delivery state. Each provider has a different identity, threading, and attachment contract.
 
+Feature ID: `chat-channels`.
+
 Implementation: [endpoint setup](../../ui/src/pages/apps/chat/ChatEndpointSetup.tsx), [endpoint detail](../../ui/src/pages/apps/chat/ChatEndpointDetail.tsx), [email setup](../../ui/src/pages/apps/chat/EmailEndpointSetup.tsx).
 
 Agent access: [companion](../agent-access-map/chat-channels.md).
 
 ## Sub-features
 
-- `providers`: configure the available Slack, Discord, Microsoft Teams, Telegram, GitHub, AgentMail, and experimental iMessage Photon and Speko paths; availability still depends on gates and provider support.
-- `identity`: link the external sender to the intended authorized Paperclip identity.
-- `conversation`: route inbound messages to the selected agent and send replies to the correct thread.
-- `attachments`: transfer supported files with inspectable delivery and failure states.
-- `lifecycle`: inspect endpoint activity, repair auth, and disable delivery when required.
+- `providers`: `chat-channels/providers` — configure the available Slack, Discord, Microsoft Teams, Telegram, GitHub, AgentMail, and experimental iMessage Photon and Speko paths; availability still depends on gates and provider support.
+- `identity`: `chat-channels/identity` — link the external sender to the intended authorized Paperclip identity.
+- `conversation`: `chat-channels/conversation` — route inbound messages to the selected agent and send replies to the correct thread.
+- `attachments`: `chat-channels/attachments` — transfer supported files with inspectable delivery and failure states.
+- `lifecycle`: `chat-channels/lifecycle` — inspect endpoint activity, repair auth, and disable delivery when required.
 
 ## How to get to it (user POV)
 
@@ -173,6 +175,8 @@ or telephone playback. Those provider outcomes remain explicit release gates.
 ### Storybook verification
 
 #### `attachments`
+
+Capability ID: `chat-channels/attachments`.
 
 Scope: ui
 Storybook: Mount TaskChatBubble attachments and ChatEndpointDetail provider-specific consent/upload/delivery failure and unknown-outcome states. Local email attachment dialog remains a prototype.

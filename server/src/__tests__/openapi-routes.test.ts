@@ -27,6 +27,7 @@ const apiPrefixes: Record<string, string> = {
   "decision-models.ts": "/api",
   "agent-observability.ts": "/api",
   "fast-responses.ts": "/api",
+  "prompt-injection-prevention.ts": "/api",
   "attention.ts": "/api",
   "approvals.ts": "/api",
   "assets.ts": "/api",
@@ -942,6 +943,21 @@ describe("openapi routes", () => {
     expect(spec.paths["/api/voice-webhooks/{publicId}/events"]).toBeUndefined();
     const decision=spec.paths["/api/companies/{companyId}/voice-phone/{endpointId}/incoming/{callId}"].post;
     expect(decision.requestBody.content["application/json"].schema.required).toEqual(expect.arrayContaining(["approve", "approvalCode"]));
+  });
+
+  it("documents board-only prompt injection settings and fixed-sample testing", () => {
+    const { spec } = loadSpecRoutes();
+    const base = "/api/companies/{companyId}/prompt-injection-prevention";
+    for (const [method, suffix] of [["get", ""], ["put", ""], ["get", "/models"], ["post", "/test"]]) {
+      expect(spec.paths[base + suffix][method]["x-paperclip-authorization"]).toEqual({ actor: "board" });
+      expect(spec.paths[base + suffix][method].security).toEqual([{ BoardSessionAuth: [] }, { BoardApiKeyAuth: [] }]);
+    }
+    expect(spec.paths[base].put.requestBody.content["application/json"].schema).toMatchObject({
+      additionalProperties: false, required: ["enabled", "connectionId", "grantId", "model"],
+    });
+    expect(spec.paths[base + "/test"].post.requestBody.content["application/json"].schema).toMatchObject({
+      type: "object", additionalProperties: false, properties: {},
+    });
   });
 
   it("covers the mounted server routes exactly", () => {

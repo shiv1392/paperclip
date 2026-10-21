@@ -6,18 +6,20 @@ navigation: {"section":"Oversight and operation","sectionOrder":70,"order":20}
 
 People inspect company health, recent activity, run history, and routine activity, then follow evidence back to the task or agent responsible.
 
+Feature ID: `activity`.
+
 Implementation: [dashboard](../../ui/src/pages/Dashboard.tsx), [live dashboard](../../ui/src/pages/DashboardLive.tsx), [audit hub](../../ui/src/pages/audit/AuditHub.tsx).
 
 Agent access: [companion](../agent-access-map/activity.md).
 
 ## Sub-features
 
-- `overview`: inspect the company dashboard and live-work summary.
-- `activity`: filter and page through recorded actor/resource events.
-- `runs`: find executions and follow their task/agent context.
-- `routine-audit`: inspect routine execution activity separately from its definition.
-- `timeline`: use the available timeline view to understand work over time.
-- `agent-commentary`: browse attributed agent suggestions and complaints.
+- `overview`: `activity/overview` — inspect the company dashboard and live-work summary.
+- `activity`: `activity/activity` — filter and page through recorded actor/resource events.
+- `runs`: `activity/runs` — find executions and follow their task/agent context.
+- `routine-audit`: `activity/routine-audit` — inspect routine execution activity separately from its definition.
+- `timeline`: `activity/timeline` — use the available timeline view to understand work over time.
+- `agent-commentary`: `activity/agent-commentary` — browse attributed agent suggestions and complaints.
 
 ## How to get to it (user POV)
 
@@ -79,6 +81,8 @@ not prove live database filtering or authorization.
 ### Storybook verification
 
 #### `runs`
+
+Capability ID: `activity/runs`.
 
 Scope: ui
 Storybook: Mount AuditRuns selected status/agent/routine, linked task/agent, empty/loading/error/retry and 200-entry limit. Do not invent pagination.

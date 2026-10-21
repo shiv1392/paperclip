@@ -6,16 +6,23 @@ navigation: {"section":"Oversight and operation","sectionOrder":70,"order":10}
 
 Operators inspect recorded spend and configure budget controls for the company, projects, and agents. Hard stops pause or prevent eligible work until the governing incident is resolved.
 
+Feature ID: `budgets-costs`.
+
 Implementation: [costs and budget host](../../ui/src/pages/Costs.tsx), [audit hub](../../ui/src/pages/audit/AuditHub.tsx).
 
 Agent access: [companion](../agent-access-map/budgets-costs.md).
 
+Prompt injection classification is a separate `prompt_injection` service charge,
+with user/agent/task/project attribution and no heartbeat receipt linkage. Unknown
+billing retains its reservation until correction; agent deletion cannot erase
+that hold. See [accounting behavior](../../doc/prompt-injection-prevention.md).
+
 ## Sub-features
 
-- `cost-reporting`: inspect spend by the offered time range and resource dimensions.
-- `budgets`: configure supported company/project/agent limits and inspect usage.
-- `incidents`: distinguish warnings, hard stops, and manual pauses.
-- `resolution`: raise or resolve a budget incident through authorized controls and verify resumption.
+- `cost-reporting`: `budgets-costs/cost-reporting` — inspect spend by the offered time range and resource dimensions.
+- `budgets`: `budgets-costs/budgets` — configure supported company/project/agent limits and inspect usage.
+- `incidents`: `budgets-costs/incidents` — distinguish warnings, hard stops, and manual pauses.
+- `resolution`: `budgets-costs/resolution` — raise or resolve a budget incident through authorized controls and verify resumption.
 
 ## How to get to it (user POV)
 
@@ -55,6 +62,8 @@ Manual: Create a small fixture budget, cross its threshold with synthetic record
 ### Storybook verification
 
 #### `resolution`
+
+Capability ID: `budgets-costs/resolution`.
 
 Scope: ui
 Storybook: Mount BudgetIncidentCard with entered raised limit, invalid limit, keep-paused, applying, authorized/blocked and error states wired through actual host. Existing matrix handlers are no-ops.

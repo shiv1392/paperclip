@@ -1066,3 +1066,13 @@ and migration history remain so existing records, documents, and links are prese
 and future schema generation does not drop them. No removal migration or data
 cleanup runs. These tables remain part of normal database backups; the separate
 Cases feature is unaffected.
+
+### Prompt injection classification
+
+`company_prompt_injection_prevention` stores optional shared connection/model
+preferences without backfilling existing companies. `prompt_injection_invocations`
+stores content-free classification verdicts, provider receipts and archival
+identity references. Budget reservations have a distinct classifier invocation
+source, and cost events accept `prompt_injection`. Unknown charges retain their
+holds through agent deletion attempts and settle through billing correction.
+See [service behavior](prompt-injection-prevention.md).

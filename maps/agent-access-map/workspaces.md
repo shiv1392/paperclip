@@ -2,6 +2,8 @@
 
 Product map: [Execution workspaces, services, and files](../feature-map/workspaces.md).
 
+Feature ID: `workspaces`.
+
 Lost-source reconstruction adds the board-only
 `POST /api/issues/{id}/recovery-actions/reconstruct-workspace` action. It requires
 `runtime:manage` and ordinary task visibility. Agents cannot authorize it. The
@@ -24,6 +26,8 @@ qualified. No live agent execution is claimed. Follow the [map contract](../READ
 for format, permission checks, evidence and maintenance.
 
 ## `binding`
+
+Capability ID: `workspaces/binding`.
 
 Review: `baseline`.
 
@@ -124,6 +128,8 @@ a running service.
 
 ## `provisioning`
 
+Capability ID: `workspaces/provisioning`.
+
 Source preparation keeps its dedicated lock connection active during work on
 other connections. It preserves company/source exclusion and existing admission
 authority; it adds no agent API or permission. The
@@ -169,6 +175,8 @@ is a separate protected operation.
 
 ## `services`
 
+Capability ID: `workspaces/services`.
+
 Review: `baseline`.
 
 API: `present` — representative operation IDs:
@@ -195,6 +203,8 @@ calls retain runtime trust and workspace/task scope checks. Optional MCP availab
 must be recorded.
 
 ## `files-git`
+
+Capability ID: `workspaces/files-git`.
 
 Review: `baseline`.
 
@@ -228,6 +238,8 @@ Root containment and symlink escape checks remain, and attachments, task records
 workspace metadata, and operation logs retain their app-data privacy.
 
 ## `closure`
+
+Capability ID: `workspaces/closure`.
 
 Review: `baseline`.
 

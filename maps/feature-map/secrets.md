@@ -6,17 +6,19 @@ navigation: {"section":"Apps, channels, and extensions","sectionOrder":50,"order
 
 Operators manage company secret references, users supply their own credentials where required, and reviewers decide proposed secret changes without exposing secret values in ordinary UI evidence.
 
+Feature ID: `secrets`.
+
 Implementation: [secrets page](../../ui/src/pages/Secrets.tsx), [personal secrets](../../ui/src/pages/secrets/MyUserSecretsTab.tsx), [proposals](../../ui/src/pages/secrets/ProposalsTab.tsx).
 
 Agent access: [companion](../agent-access-map/secrets.md).
 
 ## Sub-features
 
-- `company-secrets`: create/update secret references and control their bindings.
-- `user-secrets`: define required user credentials and set a value for the current user.
-- `proposals`: review proposed changes with the appropriate authority.
-- `vault-import`: import eligible external-vault references through the offered flow.
-- `runtime-delivery`: deliver only the secret references authorized for the run/actor. Agent-owned instance secrets stay in the trusted server runtime and are never delivered to an agent.
+- `company-secrets`: `secrets/company-secrets` — create/update secret references and control their bindings.
+- `user-secrets`: `secrets/user-secrets` — define required user credentials and set a value for the current user.
+- `proposals`: `secrets/proposals` — review proposed changes with the appropriate authority.
+- `vault-import`: `secrets/vault-import` — import eligible external-vault references through the offered flow.
+- `runtime-delivery`: `secrets/runtime-delivery` — deliver only the secret references authorized for the run/actor. Agent-owned instance secrets stay in the trusted server runtime and are never delivered to an agent.
 
 ## How to get to it (user POV)
 
@@ -57,6 +59,8 @@ Manual: Review a dummy proposal, reject one and accept another, then inspect the
 ### Storybook verification
 
 #### `proposals`
+
+Capability ID: `secrets/proposals`.
 
 Scope: ui
 Storybook: Mount ProposalsTab pending secret/binding proposals, blocked authority, expired/resolved proposal, approval/rejection pending/error, and redacted metadata.
