@@ -15,6 +15,9 @@ import {
   prepareGitHubExecutionEnvironment,
   runAdapterExecutionTargetProcess,
 } from "./execution-target.js";
+import { isolateFromRunCredentials } from "./test-support/run-credential-isolation.js";
+
+isolateFromRunCredentials();
 
 const exec = promisify(execFile);
 const roots: string[] = [];

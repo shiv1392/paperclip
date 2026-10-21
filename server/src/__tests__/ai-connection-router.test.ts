@@ -426,7 +426,7 @@ describe("durable, authorized connection routing", () => {
     const pool = await makePool({ members: [members[0]!] });
     const selected = await resolve(pool.id, "managed-mode-adoption", { requireExisting: true, existingGrantId: members[0]!.binding.grantId });
     const directBinding = { mode: "responsible_user" as const, provider: "openai" as const, method: "api_key" as const };
-    const prepare = { companyId, agentId, responsibleUserId: "alice", adapterType: "paperclip_runner", config: selected.runtimeConfig };
+    const prepare = { companyId, agentId, responsibleUserId: "alice", adapterType: "paperclip_runner", config: { ...selected.runtimeConfig, cwd: home } };
     const before = await prepareManagedAiRuntime(db, { ...prepare, binding: directBinding });
     const after = await prepareManagedAiRuntime(db, { ...prepare, binding: selected.binding });
     try {
@@ -491,7 +491,7 @@ describe("durable, authorized connection routing", () => {
   }, 30_000);
 
   it("keeps session identity and fingerprints stable on authenticated refresh, but changes them on manual replacement", async () => {
-    const input = { companyId, agentId, responsibleUserId: "alice", adapterType: "paperclip_runner", binding: members[0]!.binding, config: { provider: "codex", model: "gpt-5.6-sol" } };
+    const input = { companyId, agentId, responsibleUserId: "alice", adapterType: "paperclip_runner", binding: members[0]!.binding, config: { provider: "codex", model: "gpt-5.6-sol", cwd: home } };
     const first = await prepareManagedAiRuntime(db, input);
     const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, members[0]!.binding.grantId)); const ref = grant!.credentialSecretRefs.find(ref => ref.configPath === "ai.credential")!;
     try {
