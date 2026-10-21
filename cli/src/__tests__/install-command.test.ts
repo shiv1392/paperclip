@@ -53,6 +53,11 @@ describe("managed install commands", () => {
       SHELL: "/bin/bash",
     };
     fs.mkdirSync(process.env.HOME!, { recursive: true });
+    // Replacing process.env does not isolate os.homedir() in every worker.
+    // Uninstall fixtures must use their explicit temporary-home dependency.
+    vi.spyOn(os, "homedir").mockImplementation(() => {
+      throw new Error("install fixtures must not discover the host user home");
+    });
     vi.spyOn(console, "log").mockImplementation(() => undefined);
   });
 
@@ -275,6 +280,7 @@ describe("managed install commands", () => {
       expect(fs.existsSync(paths.shimPath)).toBe(true);
     });
     await uninstallCommand({
+      userHomeDir: process.env.HOME!,
       detectServiceManager: vi.fn(async () => ({
         supported: true as const,
         manager: {
@@ -363,7 +369,10 @@ describe("managed install commands", () => {
         uninstall: uninstallService,
       } as never,
     }));
-    await expect(uninstallCommand({ detectServiceManager })).rejects.toThrow("unverified install store");
+    await expect(uninstallCommand({
+      detectServiceManager,
+      userHomeDir: process.env.HOME!,
+    })).rejects.toThrow("unverified install store");
     expect(detectServiceManager).toHaveBeenCalledOnce();
     expect(uninstallService).not.toHaveBeenCalled();
     expect(fs.readFileSync(unrelatedFile, "utf8")).toBe("keep");
@@ -395,7 +404,10 @@ describe("managed install commands", () => {
             uninstall: uninstallService,
           } as never,
         }));
-        await expect(uninstallCommand({ detectServiceManager })).rejects.toThrow("already running");
+        await expect(uninstallCommand({
+          detectServiceManager,
+          userHomeDir: process.env.HOME!,
+        })).rejects.toThrow("already running");
         expect(detectServiceManager).toHaveBeenCalledOnce();
         expect(uninstallService).not.toHaveBeenCalled();
       },
