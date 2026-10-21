@@ -620,17 +620,17 @@ describeEmbeddedPostgres("issue review transfers", () => {
         return after!;
       }
 
-      it("carries the source's used rounds onto the mapped stage and keeps them on replay", async () => {
+      it.each([0, 2])("carries %i source rounds onto the mapped stage and keeps them on replay", async (rounds) => {
         const fixture = await seedDelivery();
-        const source = await sourceWithRounds(fixture, fixture.sourceId, 2);
+        const source = await sourceWithRounds(fixture, fixture.sourceId, rounds);
         const body = transferBody(fixture, { expectedSourceUpdatedAt: source.updatedAt.toISOString() });
         const created = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(body).expect(201);
         expect(created.body.transfer.obligation).toMatchObject({
-          changesRequestedCount: 2, maxReviewRounds: null, escalation: { maxReviewRounds: 3, escalationUserId: null },
+          changesRequestedCount: rounds, maxReviewRounds: null, escalation: { maxReviewRounds: 3, escalationUserId: null },
         });
         const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
         const stages = (parent!.executionPolicy as { stages: Array<Record<string, unknown>> }).stages;
-        expect(stages[0]).toMatchObject({ id: created.body.transfer.destinationStageId, carriedReviewRounds: 2 });
+        expect(stages[0]).toMatchObject({ id: created.body.transfer.destinationStageId, carriedReviewRounds: rounds });
         expect(stages[1]).toEqual(fixture.parentGate);
 
         const replay = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(body).expect(200);
@@ -641,7 +641,7 @@ describeEmbeddedPostgres("issue review transfers", () => {
         await startParentReview(fixture);
         const [started] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
         expect(started!.executionState).toMatchObject({
-          currentStageId: created.body.transfer.destinationStageId, changesRequestedCount: 2,
+          currentStageId: created.body.transfer.destinationStageId, changesRequestedCount: rounds,
         });
         // The source keeps its own count as history.
         const [sourceAfter] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));

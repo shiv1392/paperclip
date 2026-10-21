@@ -2368,6 +2368,27 @@ describe("review round circuit breaker", () => {
       expect(result.patch.executionState).toMatchObject({ currentStageId: carriedStage.id, changesRequestedCount: 2 });
     });
 
+    it("preserves zero carried rounds instead of inheriting another stage count", () => {
+      const zeroPolicy = normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "agent", agentId: qaAgentId }], carriedReviewRounds: 0 }] })!;
+      expect(zeroPolicy.stages[0]!.carriedReviewRounds).toBe(0);
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress", assigneeAgentId: coderAgentId, assigneeUserId: null, responsibleUserId: boardUserId,
+          executionPolicy: zeroPolicy,
+          executionState: {
+            status: "idle", currentStageId: null, currentStageIndex: null, currentStageType: null,
+            currentParticipant: null, returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: "changes_requested", changesRequestedCount: 5,
+          },
+        },
+        policy: zeroPolicy,
+        requestedStatus: "in_review",
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+      });
+      expect(result.patch.executionState).toMatchObject({ currentStageId: zeroPolicy.stages[0]!.id, changesRequestedCount: 0 });
+    });
+
     it("escalates on the first new agent round once the carried rounds reach the cap", () => {
       const result = applyIssueExecutionPolicyTransition({
         issue: {

@@ -376,7 +376,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
         type: stage.type,
         approvalsNeeded: 1 as const,
         participants: dedupedParticipants,
-        ...(stage.carriedReviewRounds ? { carriedReviewRounds: stage.carriedReviewRounds } : {}),
+        ...(stage.carriedReviewRounds !== undefined ? { carriedReviewRounds: stage.carriedReviewRounds } : {}),
       };
     })
     .filter((stage): stage is NonNullable<typeof stage> => stage !== null);
