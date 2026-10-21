@@ -18,6 +18,7 @@ import type {
   IssueExecutionPolicy,
   IssueExecutionStage,
   IssueExecutionStagePrincipal,
+  IssueReviewPolicy,
   RequestIssueReviewTransfer,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -212,6 +213,8 @@ function canonicalReview(policy: IssueExecutionPolicy | null) {
   const stages = policyStages(policy);
   return JSON.stringify({
     maxReviewRounds: policy?.maxReviewRounds ?? null,
+    reviewPreset: policy?.reviewPreset ?? null,
+    authorizationPolicy: Object.keys(policy?.authorizationPolicy ?? {}).length > 0 ? policy?.authorizationPolicy : null,
     stages: stages.map((stage) => ({
       id: stage.id,
       type: stage.type,
@@ -492,6 +495,17 @@ export function issueReviewTransferService(db: Db) {
         throw unprocessable("The destination has no native review gate to hold this obligation.", {
           code: "review_transfer_destination_gate_missing",
         });
+      }
+      // These controls apply to a whole task, not one stage. Copying only the
+      // stage would lose their original requester or trust context.
+      for (const [issue, policy] of [[source, sourcePolicy], [destination, destinationPolicy]] as const) {
+        if ((issue.reviewPolicy ?? "anyone") !== "anyone" || policy?.reviewPreset
+          || Object.keys(policy?.authorizationPolicy ?? {}).length > 0) {
+          throw unprocessable("This task has verdict or trust controls that cannot be represented on a transferred stage.", {
+            code: "review_transfer_policy_unrepresentable",
+            issueId: issue.id,
+          });
+        }
       }
       // The engine applies one round limit and one escalation human to all
       // stages of a task. The mapped stage keeps the source's used rounds,
@@ -872,18 +886,27 @@ export async function assertIssueUpdateKeepsTransfers(
     nextStatus: string | undefined;
     nextExecutionPolicy: Record<string, unknown> | null | undefined;
     nextExecutionState?: Record<string, unknown> | null;
+    nextReviewPolicy?: IssueReviewPolicy | null;
   },
 ) {
   const touching = await transfersTouching(tx, input.companyId, input.issueId);
   if (touching.length === 0) return;
   const [current] = await tx
-    .select({ executionPolicy: issues.executionPolicy, executionState: issues.executionState })
+    .select({ executionPolicy: issues.executionPolicy, executionState: issues.executionState,
+      reviewPolicy: issues.reviewPolicy })
     .from(issues)
     .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.companyId)));
-  const currentPolicy = normalizeIssueExecutionPolicy(current?.executionPolicy ?? null);
+  if (!current) throw notFound("Issue not found");
+  const currentPolicy = normalizeIssueExecutionPolicy(current.executionPolicy ?? null);
   const nextPolicy = input.nextExecutionPolicy === undefined
     ? currentPolicy
     : normalizeIssueExecutionPolicy(input.nextExecutionPolicy ?? null);
+  if (input.nextReviewPolicy !== undefined
+    && (input.nextReviewPolicy ?? "anyone") !== (current.reviewPolicy ?? "anyone")) {
+    throw conflict("The verdict rule of a task with review transfers cannot change.", {
+      code: "review_transfer_review_policy_locked",
+    });
+  }
 
   const outgoing = touching.filter((row) => row.sourceIssueId === input.issueId);
   if (outgoing.length > 0) {

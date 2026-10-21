@@ -90,7 +90,7 @@ whole set; the API does not return a partial manifest.
 
 Policy: Task visibility/mutation, task-assignment and ownership policy; review audience
 independent; tree controls board-only. Review transfer requires a board actor with
-company access and `issue:mutate` on the source and the delivery, checked separately.
+company access and `issue:mutate` on the source and the delivery, checked separately. Task-level verdict restrictions and custom trust controls are unsupported and fail closed. Transferred tasks keep their verdict, trust and escalation authority.
 
 Evidence: `source-only` —
 [implementation](../../server/src/routes/issue-tree-control.ts#L95) at the reviewed
