@@ -10763,7 +10763,8 @@ registerCurrentRoute({
   method: "get",
   path: "/api/issues/{id}/review-transfers",
   tags: ["issues"],
-  summary: "Read a task's review transfers and, for a delivery, its review manifest",
+  summary: "Read transfers and the complete review manifest only when both sides of every transfer are readable",
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
 });
 
 registerCurrentRoute({

@@ -84,7 +84,9 @@ API: `present` — representative operation IDs:
 
 Agent access: `partial` — Native paperclip_finish/paperclip_block and assigned
 resolve_review; legacy agent REST disposition. Review transfer and receipts are
-`operator-only`; agents can read transfers on tasks they can read.
+`operator-only`; agents can read transfers only when they can read both sides of
+every transfer in the returned set. An unreadable counterpart returns 404 for the
+whole set; the API does not return a partial manifest.
 
 Policy: Task visibility/mutation, task-assignment and ownership policy; review audience
 independent; tree controls board-only. Review transfer requires a board actor with
