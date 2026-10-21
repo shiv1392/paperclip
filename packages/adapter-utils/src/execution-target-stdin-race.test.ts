@@ -820,6 +820,7 @@ describe("stdin file race (parent PAP-4037)", () => {
     expect(finalizeScript).toMatch(/> '[^']+\.paperclip-upload\.decoded'/);
   });
 
+  // Six real uploads run beside the reader; their operation limits stay intact.
   it("never exposes a partial .json file under a concurrent reader (command-managed host write)", async () => {
     const remoteRoot = await mkdtemp(path.join(os.tmpdir(), "paperclip-stdin-host-race-"));
     cleanupDirs.push(remoteRoot);
@@ -854,18 +855,22 @@ describe("stdin file race (parent PAP-4037)", () => {
       }
     })();
 
-    for (let round = 0; round < 6; round += 1) {
-      await client.remove(jsonPath);
-      await client.writeTextFile(jsonPath, body);
+    try {
+      for (let round = 0; round < 6; round += 1) {
+        await client.remove(jsonPath);
+        await client.writeTextFile(jsonPath, body);
+      }
+    } finally {
+      // A failed upload must not leave the reader running during later tests.
+      stop = true;
+      await reader;
     }
-    stop = true;
-    await reader;
 
     // Every read of the final file parsed as complete JSON. The reader never
     // saw an empty or partial `.json` file.
     expect(readerErrors).toEqual([]);
     expect(observedComplete).toBeGreaterThan(0);
-  });
+  }, 20_000);
 });
 
 // Coverage for deterministic wrapper shutdown (parent PAP-5307): a bridge
