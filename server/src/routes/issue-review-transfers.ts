@@ -14,12 +14,16 @@ export function issueReviewTransferRoutes(db: Db) {
   const access = accessService(db);
   const transfers = issueReviewTransferService(db);
 
-  async function assertCanMutate(req: Request, issue: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>) {
+  async function assertCanAccess(
+    req: Request,
+    issue: NonNullable<Awaited<ReturnType<typeof issuesSvc.getById>>>,
+    action: "issue:read" | "issue:mutate",
+  ) {
     if (!hasCompanyAccess(req, issue.companyId)) throw notFound("Issue not found");
     assertCompanyAccess(req, issue.companyId);
     const decision = await access.decide({
       actor: req.actor,
-      action: "issue:mutate",
+      action,
       resource: {
         type: "issue",
         companyId: issue.companyId,
@@ -30,8 +34,18 @@ export function issueReviewTransferRoutes(db: Db) {
         assigneeUserId: issue.assigneeUserId ?? null,
         status: issue.status,
       },
+      scope: {
+        issueId: issue.id,
+        projectId: issue.projectId,
+        parentIssueId: issue.parentId,
+        assigneeAgentId: issue.assigneeAgentId,
+        assigneeUserId: issue.assigneeUserId,
+      },
     });
-    if (!decision.allowed) throw forbidden("You cannot change this task's review routing.");
+    if (!decision.allowed) {
+      if (action === "issue:read") throw notFound("Issue not found");
+      throw forbidden("You cannot change this task's review routing.");
+    }
   }
 
   router.post("/issues/:id/review-transfers", validate(requestIssueReviewTransferSchema), async (req, res) => {
@@ -48,8 +62,8 @@ export function issueReviewTransferRoutes(db: Db) {
     );
     if (!destination) return;
     // Check each side independently: access to one task never implies the other.
-    await assertCanMutate(req, source);
-    await assertCanMutate(req, destination);
+    await assertCanAccess(req, source, "issue:mutate");
+    await assertCanAccess(req, destination, "issue:mutate");
 
     const actor = getActorInfo(req);
     const result = await transfers.transfer(
@@ -75,8 +89,8 @@ export function issueReviewTransferRoutes(db: Db) {
       if (!row) throw notFound("Review transfer not found");
       const destination = await issuesSvc.getById(row.destinationIssueId);
       if (!destination) throw notFound("Review transfer not found");
-      await assertCanMutate(req, accessible);
-      await assertCanMutate(req, destination);
+      await assertCanAccess(req, accessible, "issue:mutate");
+      await assertCanAccess(req, destination, "issue:mutate");
       const actor = getActorInfo(req);
       const result = await transfers.attachReceipts(
         { ...req.body, companyId: accessible.companyId, transferId },
@@ -89,7 +103,18 @@ export function issueReviewTransferRoutes(db: Db) {
   router.get("/issues/:id/review-transfers", async (req, res) => {
     const issue = await getAccessibleResource(req, res, issuesSvc.getById(req.params.id as string), "Issue not found");
     if (!issue) return;
-    res.json(await transfers.readTransfers(issue.companyId, issue.id));
+    await assertCanAccess(req, issue, "issue:read");
+    const result = await transfers.readTransfers(issue.companyId, issue.id);
+    const counterparts = new Set([...result.outgoing, ...result.incoming]
+      .flatMap((row) => [row.sourceIssueId, row.destinationIssueId])
+      .filter((id) => id !== issue.id));
+    for (const id of counterparts) {
+      const counterpart = await issuesSvc.getById(id);
+      if (!counterpart || counterpart.companyId !== issue.companyId) throw notFound("Issue not found");
+      await assertCanAccess(req, counterpart, "issue:read");
+    }
+    // Do not return a partial manifest that hides one of its approval obligations.
+    res.json(result);
   });
 
   return router;

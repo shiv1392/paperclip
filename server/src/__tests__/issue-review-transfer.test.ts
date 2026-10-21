@@ -1,17 +1,20 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import {
   activityLog,
+  authUsers,
   approvals,
   environmentLeases,
   environments,
   issueApprovals,
   agents,
   companies,
+  companyMemberships,
   heartbeatRuns,
   issueExecutionDecisions,
+  issueAccessGrants,
   issueRelations,
   issueThreadInteractions,
   issueReviewTransfers,
@@ -30,6 +33,55 @@ describeEmbeddedPostgres("issue review transfers", () => {
   let db: typeof harness.db;
   beforeAll(() => {
     db = harness.db;
+  });
+  describe("read privacy", () => {
+    const previousPrivacyMode = process.env.PAPERCLIP_ISSUE_PRIVACY_MODE;
+    beforeAll(() => { process.env.PAPERCLIP_ISSUE_PRIVACY_MODE = "enforce"; });
+    afterAll(() => {
+      if (previousPrivacyMode === undefined) delete process.env.PAPERCLIP_ISSUE_PRIVACY_MODE;
+      else process.env.PAPERCLIP_ISSUE_PRIVACY_MODE = previousPrivacyMode;
+    });
+
+    async function privateTransfer(hiddenSide: "source" | "destination") {
+      const fixture = await seedDelivery();
+      const created = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`)
+        .send(transferBody(fixture)).expect(201);
+      const ownerId = randomUUID();
+      const readerId = randomUUID();
+      await db.insert(authUsers).values([ownerId, readerId].map((id) => ({
+        id, name: "Member", email: `${id}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date(),
+      })));
+      await db.insert(companyMemberships).values([ownerId, readerId].map((principalId) => ({
+        companyId: fixture.companyId, principalType: "user", principalId, status: "active", membershipRole: "operator",
+      })));
+      const hiddenId = hiddenSide === "source" ? fixture.sourceId : fixture.parentId;
+      const visibleId = hiddenSide === "source" ? fixture.parentId : fixture.sourceId;
+      await db.update(issues).set({ visibility: "private", privacyRootIssueId: hiddenId, responsibleUserId: ownerId })
+        .where(eq(issues.id, hiddenId));
+      // Sharing one side never grants access to its private counterpart.
+      await db.insert(issueAccessGrants).values({ issueId: visibleId, subjectType: "user", subjectId: readerId, source: "explicit" });
+      const actor = { type: "board", source: "session", userId: readerId, companyIds: [fixture.companyId], isInstanceAdmin: false };
+      await request(createApp(actor)).get(`/api/issues/${hiddenId}`).expect(404);
+      await request(createApp(actor)).get(`/api/issues/${visibleId}`).expect(200);
+      return { ...fixture, hiddenId, visibleId, readerId, actor, transferId: created.body.transfer.id };
+    }
+
+    it.each(["source", "destination"] as const)("hides a private %s's transfer from another company member", async (side) => {
+      const fixture = await privateTransfer(side);
+      const response = await request(createApp(fixture.actor)).get(`/api/issues/${fixture.hiddenId}/review-transfers`).expect(404);
+      expect(response.body).toEqual({ error: "Issue not found" });
+    });
+
+    it.each(["source", "destination"] as const)("does not disclose a private %s through the readable counterpart", async (side) => {
+      const fixture = await privateTransfer(side);
+      const response = await request(createApp(fixture.actor)).get(`/api/issues/${fixture.visibleId}/review-transfers`).expect(404);
+      expect(response.body).toEqual({ error: "Issue not found" });
+      await db.insert(issueAccessGrants).values({ issueId: fixture.hiddenId, subjectType: "user", subjectId: fixture.readerId, source: "explicit" });
+      for (const id of [fixture.sourceId, fixture.parentId]) {
+        const allowed = await request(createApp(fixture.actor)).get(`/api/issues/${id}/review-transfers`).expect(200);
+        expect([...allowed.body.incoming, ...allowed.body.outgoing].map((row: { id: string }) => row.id)).toEqual([fixture.transferId]);
+      }
+    });
   });
   it("moves a pending child review to its own held stage on the top-level delivery", async () => {
     const fixture = await seedDelivery();
