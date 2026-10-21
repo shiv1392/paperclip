@@ -36,7 +36,7 @@ suite("durable plugin task credential handoff", () => {
     await service.save(companyId, owner, { provider: "openai", method: "subscription", ownership: "personal", name: "Fixture Codex", loginSessionId: "fixture", agentIds: [], allAgents: true }, auth("fixture-original"));
     const [selection] = await service.quotaAccounts(companyId, owner);
     const managed = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "paperclip_runner",
-      binding: { mode: "responsible_user", provider: "openai", method: "subscription" }, config: { provider: "codex" } });
+      binding: { mode: "responsible_user", provider: "openai", method: "subscription" }, config: { provider: "codex", cwd: home } });
     expect(managed.credentialWriteback).toBeDefined();
     await db.insert(environments).values({ id: environmentId, name: `Fixture ${environmentId}`, driver: "plugin", status: "active", config: { pluginKey: pluginId, driverKey: "tasks", driverConfig: {} } });
     await db.insert(plugins).values({ id: pluginId, pluginKey: pluginId, packageName: "fixture-tasks", version: "1.0.0", status: "ready", manifestJson: {
