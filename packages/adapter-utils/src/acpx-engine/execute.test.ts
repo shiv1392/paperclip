@@ -6893,33 +6893,33 @@ describe("ACPX engine run lifecycle corrections (F1: settle every failure after 
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("test_sandbox_startup_span_ends_exactly_once_on_every_exit_path", async () => {
-    // Each scenario runs a fresh remote bring-up with a recording trace and asserts
-    // the one sandbox.startup span ends exactly once, whatever the exit path.
-    const failingEnsure = () =>
-      ({
-        ensureSession: async () => {
-          throw new Error("ensureSession boom");
-        },
-        startTurn: () => ({
-          events: (async function* () {})(),
-          result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
-          cancel: async () => {},
-        }),
-        close: async () => {},
-      }) as never;
-    const scenarios: Array<{ name: string; createRuntime: AcpxEngineExecutorOptions["createRuntime"] }> = [
-      { name: "success", createRuntime: () => buildRuntime() as never },
-      {
-        name: "create_runtime failure",
-        createRuntime: () => {
-          throw new Error("createRuntime boom");
-        },
+  const failingEnsure = () =>
+    ({
+      ensureSession: async () => {
+        throw new Error("ensureSession boom");
       },
-      { name: "ensure_session failure", createRuntime: () => failingEnsure() },
-    ];
+      startTurn: () => ({
+        events: (async function* () {})(),
+        result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
+        cancel: async () => {},
+      }),
+      close: async () => {},
+    }) as never;
+  const startupSpanExitScenarios: Array<{ name: string; createRuntime: AcpxEngineExecutorOptions["createRuntime"] }> = [
+    { name: "success", createRuntime: () => buildRuntime() as never },
+    {
+      name: "create_runtime failure",
+      createRuntime: () => {
+        throw new Error("createRuntime boom");
+      },
+    },
+    { name: "ensure_session failure", createRuntime: () => failingEnsure() },
+  ];
 
-    for (const scenario of scenarios) {
+  // Keep the default per-case deadline for each independent bring-up.
+  it.each(startupSpanExitScenarios)(
+    "test_sandbox_startup_span_ends_exactly_once_on_every_exit_path: $name",
+    async (scenario) => {
       const { stateDir, localCwd, executionTarget } = await setupRemoteSandbox();
       const { traceContext, spans } = createRecordingStartupTrace();
       const execute = createAcpxEngineExecutor({
@@ -6949,8 +6949,8 @@ describe("ACPX engine run lifecycle corrections (F1: settle every failure after 
         startupSpans[0]!.endCalls,
         `scenario "${scenario.name}" must end the sandbox.startup span exactly once`,
       ).toBe(1);
-    }
-  });
+    },
+  );
 });
 
 describe("ACPX engine run lifecycle corrections (F2: close the runtime for every pre-turn failure)", () => {
