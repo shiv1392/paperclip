@@ -242,7 +242,7 @@ function copyStageForDestination(stage: IssueExecutionStage, usedReviewRounds: n
     type: stage.type,
     approvalsNeeded: stage.approvalsNeeded,
     participants: stage.participants.map((participant) => ({ ...participant, id: randomUUID() })),
-    ...(usedReviewRounds > 0 ? { carriedReviewRounds: usedReviewRounds } : {}),
+    carriedReviewRounds: usedReviewRounds,
   };
 }
 
