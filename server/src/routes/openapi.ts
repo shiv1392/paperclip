@@ -247,6 +247,8 @@ import {
   // Issue recovery and decomposition
   createAcceptedPlanDecompositionSchema,
   resolveIssueRecoveryActionSchema,
+  requestIssueReviewTransferSchema,
+  attachIssueReviewTransferReceiptsSchema,
   recoverWorkspaceSchema,
   retryWorkspaceExportSchema,
   reconstructWorkspaceSchema,
@@ -10739,6 +10741,31 @@ registerCurrentRoute({
   tags: ["issues"],
   summary: "Resolve an issue recovery action",
   body: resolveIssueRecoveryActionSchema,
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/issues/{id}/review-transfers",
+  tags: ["issues"],
+  summary: "Move a child task's outstanding review to its top-level delivery (board only)",
+  body: requestIssueReviewTransferSchema,
+  responses: { 200: r.ok(), 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/issues/{id}/review-transfers",
+  tags: ["issues"],
+  summary: "Read a task's review transfers and, for a delivery, its review manifest",
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/review-transfers/{transferId}/receipts",
+  tags: ["issues"],
+  summary: "Attach versioned receipts to a review transfer (board only)",
+  body: attachIssueReviewTransferReceiptsSchema,
+  responses: { 200: r.ok(), 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
 });
 
 registerCurrentRoute({
