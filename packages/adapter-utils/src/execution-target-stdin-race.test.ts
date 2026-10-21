@@ -14,6 +14,9 @@ import {
 } from "./execution-target.js";
 import { createCommandManagedSandboxCallbackBridgeQueueClient } from "./sandbox-callback-bridge.js";
 import { runChildProcess, type RunProcessResult } from "./server-utils.js";
+import { isolateFromRunCredentials } from "./test-support/run-credential-isolation.js";
+
+isolateFromRunCredentials();
 
 const execFile = promisify(execFileCallback);
 

@@ -30,6 +30,9 @@ import type { Http2BridgeForwardRequest, Http2BridgeForwardResult } from "./http
 import type { CommandManagedDuplexChannel } from "./command-managed-runtime.js";
 import type { RuntimeSpanRunner } from "./acpx-engine/startup-timing.js";
 import type { RunProcessResult } from "./server-utils.js";
+import { isolateFromRunCredentials } from "./test-support/run-credential-isolation.js";
+
+isolateFromRunCredentials();
 
 const execFile = promisify(execFileCallback);
 

@@ -58,7 +58,9 @@ import {
   runWithRuntimeParent,
   SANDBOX_STARTUP_SPAN_ATTRS,
 } from "./startup-timing.js";
+import { isolateFromRunCredentials } from "../test-support/run-credential-isolation.js";
 
+isolateFromRunCredentials();
 
 const tempRoots: string[] = [];
 let defaultGeminiTestHome: string | undefined;

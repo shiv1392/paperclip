@@ -1688,7 +1688,10 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     "preserves AI configuration recovery and reports only unexpected causes: %s", async (cause) => {
       const { companyId, agentId, issueId, runId, wakeupRequestId } = await seedQueuedIssueRunFixture();
       await db.insert(companyMemberships).values({ companyId, principalType: "user", principalId: "responsible-user", status: "active", membershipRole: "member" }).onConflictDoNothing();
-      await db.update(agents).set({ runtimeConfig: {
+      // A test-owned cwd keeps an ancestor project auth config on the host
+      // from replacing the expected missing-default failure.
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-ai-recovery-cwd-"));
+      await db.update(agents).set({ adapterConfig: { cwd }, runtimeConfig: {
         heartbeat: { wakeOnDemand: true, maxConcurrentRuns: 1 },
         aiConnection: { provider: "openai", method: "api_key", mode: "responsible_user" },
       } }).where(eq(agents.id, agentId));
@@ -1734,6 +1737,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       } finally {
         prepare.mockRestore();
         await db.delete(companyMemberships).where(eq(companyMemberships.companyId, companyId));
+        await fs.rm(cwd, { recursive: true, force: true });
       }
     },
   );
