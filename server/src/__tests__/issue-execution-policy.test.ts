@@ -2321,4 +2321,74 @@ describe("review round circuit breaker", () => {
       changesRequestedCount: 1,
     });
   });
+  describe("rounds carried by a transferred stage", () => {
+    const carriedPolicy = normalizeIssueExecutionPolicy({
+      stages: [
+        { type: "review", participants: [{ type: "agent", agentId: qaAgentId }], carriedReviewRounds: 2 },
+        { type: "review", participants: [{ type: "agent", agentId: qaAgentId }] },
+      ],
+    })!;
+    const [carriedStage, gateStage] = carriedPolicy.stages;
+
+    it("keeps carriedReviewRounds through policy normalization", () => {
+      expect(carriedStage.carriedReviewRounds).toBe(2);
+      expect(gateStage).not.toHaveProperty("carriedReviewRounds");
+    });
+
+    it("starts the round count at the carried rounds when the stage begins", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress", assigneeAgentId: coderAgentId, assigneeUserId: null,
+          responsibleUserId: boardUserId, executionPolicy: carriedPolicy, executionState: null,
+        },
+        policy: carriedPolicy,
+        requestedStatus: "in_review",
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+      });
+      expect(result.patch.executionState).toMatchObject({ currentStageId: carriedStage.id, changesRequestedCount: 2 });
+    });
+
+    it("escalates on the first new agent round once the carried rounds reach the cap", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review", assigneeAgentId: qaAgentId, assigneeUserId: null, responsibleUserId: boardUserId,
+          executionPolicy: carriedPolicy,
+          executionState: {
+            status: "pending", currentStageId: carriedStage.id, currentStageIndex: 0, currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId }, returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: null, changesRequestedCount: 2,
+          },
+        },
+        policy: carriedPolicy,
+        requestedStatus: "in_progress",
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+        commentBody: "Third round across both tasks",
+      });
+      expect(result.patch.executionState).toMatchObject({
+        status: "pending", currentParticipant: { type: "user", userId: boardUserId }, changesRequestedCount: 3,
+      });
+    });
+
+    it("does not carry rounds into the next stage after approval", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review", assigneeAgentId: qaAgentId, assigneeUserId: null, responsibleUserId: boardUserId,
+          executionPolicy: carriedPolicy,
+          executionState: {
+            status: "pending", currentStageId: carriedStage.id, currentStageIndex: 0, currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId }, returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: null, changesRequestedCount: 2,
+          },
+        },
+        policy: carriedPolicy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+        commentBody: "Approved.",
+      });
+      expect(result.patch.executionState).toMatchObject({ currentStageId: gateStage.id, changesRequestedCount: 0 });
+    });
+  });
 });

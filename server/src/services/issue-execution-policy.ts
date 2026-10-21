@@ -376,6 +376,7 @@ export function normalizeIssueExecutionPolicy(input: unknown): IssueExecutionPol
         type: stage.type,
         approvalsNeeded: 1 as const,
         participants: dedupedParticipants,
+        ...(stage.carriedReviewRounds ? { carriedReviewRounds: stage.carriedReviewRounds } : {}),
       };
     })
     .filter((stage): stage is NonNullable<typeof stage> => stage !== null);
@@ -443,6 +444,15 @@ export function principalsEqual(a: IssueExecutionStagePrincipal | null, b: Issue
 function resolveMaxReviewRounds(policy: IssueExecutionPolicy | null): number {
   const configured = policy?.maxReviewRounds;
   return typeof configured === "number" && configured > 0 ? configured : DEFAULT_MAX_REVIEW_ROUNDS;
+}
+
+/**
+ * The escalation contract the engine applies to every review stage of one
+ * task: the round limit and the human who receives the review when it is
+ * reached. Both are per task, not per stage.
+ */
+export function reviewEscalationContract(issue: IssueLike, policy: IssueExecutionPolicy | null) {
+  return { maxReviewRounds: resolveMaxReviewRounds(policy), escalationUserId: reviewEscalationUserId(issue) };
 }
 
 /**
@@ -605,8 +615,14 @@ function buildPendingState(input: {
     lastDecisionId: input.previous?.lastDecisionId ?? null,
     lastDecisionOutcome: input.previous?.lastDecisionOutcome ?? null,
     monitor: input.previous?.monitor ?? null,
-    changesRequestedCount: input.changesRequestedCount ?? input.previous?.changesRequestedCount ?? 0,
+    changesRequestedCount: input.changesRequestedCount ?? startingReviewRounds(input.previous, input.stage),
   };
+}
+
+function startingReviewRounds(previous: IssueExecutionState | null, stage: IssueExecutionStage) {
+  const previousRounds = previous?.changesRequestedCount ?? 0;
+  if (previous?.currentStageId === stage.id) return previousRounds;
+  return Math.max(previousRounds, stage.carriedReviewRounds ?? 0);
 }
 
 function buildChangesRequestedState(

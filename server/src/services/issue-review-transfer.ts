@@ -27,6 +27,7 @@ import {
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
   principalsEqual,
+  reviewEscalationContract,
 } from "./issue-execution-policy.js";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -215,6 +216,7 @@ function canonicalReview(policy: IssueExecutionPolicy | null) {
       id: stage.id,
       type: stage.type,
       approvalsNeeded: stage.approvalsNeeded,
+      carriedReviewRounds: stage.carriedReviewRounds ?? 0,
       participants: stage.participants.map((participant) => ({
         type: participant.type,
         agentId: participant.agentId ?? null,
@@ -231,12 +233,13 @@ function samePrincipal(
   return (!a && !b) || principalsEqual(a ?? null, b ?? null);
 }
 
-function copyStageForDestination(stage: IssueExecutionStage): IssueExecutionStage {
+function copyStageForDestination(stage: IssueExecutionStage, usedReviewRounds: number): IssueExecutionStage {
   return {
     id: randomUUID(),
     type: stage.type,
     approvalsNeeded: stage.approvalsNeeded,
     participants: stage.participants.map((participant) => ({ ...participant, id: randomUUID() })),
+    ...(usedReviewRounds > 0 ? { carriedReviewRounds: usedReviewRounds } : {}),
   };
 }
 
@@ -490,6 +493,21 @@ export function issueReviewTransferService(db: Db) {
           code: "review_transfer_destination_gate_missing",
         });
       }
+      // The engine applies one round limit and one escalation human to all
+      // stages of a task. The mapped stage keeps the source's used rounds,
+      // but the limit and the human must already be the same on both tasks.
+      const sourceContract = reviewEscalationContract(source, sourcePolicy);
+      const destinationContract = reviewEscalationContract(destination, destinationPolicy);
+      if (sourceContract.maxReviewRounds !== destinationContract.maxReviewRounds
+        || sourceContract.escalationUserId !== destinationContract.escalationUserId) {
+        throw unprocessable("The source and destination escalate reviews differently, so the transferred review cannot keep its escalation contract.", {
+          code: "review_transfer_escalation_unrepresentable",
+          source: sourceContract,
+          destination: destinationContract,
+        });
+      }
+      const usedReviewRounds = stageIsCurrent ? sourceState?.changesRequestedCount ?? 0 : 0;
+
       const destinationState = parseIssueExecutionState(destination.executionState);
       if (destinationState && destinationState.status !== "idle") {
         throw conflict("The destination review has already started. Transfer obligations before it starts.", {
@@ -545,7 +563,7 @@ export function issueReviewTransferService(db: Db) {
           eq(issueExecutionDecisions.stageId, sourceStage.id),
         ));
 
-      const mappedStage = copyStageForDestination(sourceStage);
+      const mappedStage = copyStageForDestination(sourceStage, usedReviewRounds);
       // Transferred obligations precede the existing whole-delivery gate so
       // every one is decided before the delivery itself is reviewed.
       const nextDestinationPolicy: IssueExecutionPolicy = {
@@ -576,6 +594,7 @@ export function issueReviewTransferService(db: Db) {
             approvalsNeeded: sourceStage.approvalsNeeded,
             commentRequired: sourcePolicy?.commentRequired ?? true,
             maxReviewRounds: sourcePolicy?.maxReviewRounds ?? null,
+            escalation: sourceContract,
             currentStageId: sourceState?.currentStageId ?? null,
             returnAssignee: sourceState?.returnAssignee ?? null,
             currentParticipant: sourceState?.currentParticipant ?? null,
@@ -899,12 +918,67 @@ export async function assertIssueUpdateKeepsTransfers(
         transferId: undecided.id,
       });
     }
+    await assertEveryDeliveryStageApproved(tx, {
+      companyId: input.companyId,
+      issueId: input.issueId,
+      policy: nextPolicy,
+      before: parseIssueExecutionState(current?.executionState ?? null),
+      after: input.nextExecutionState === undefined
+        ? parseIssueExecutionState(current?.executionState ?? null)
+        : parseIssueExecutionState(input.nextExecutionState),
+      transferId: rows[0]!.id,
+    });
   }
   if (canonicalReview(currentPolicy) !== canonicalReview(nextPolicy)) {
     if (await manifestIsFrozen(tx, input.companyId, input.issueId)) throw manifestFrozen(input.issueId);
     throw conflict("The review stages of a delivery with transferred reviews cannot change.", {
       code: "review_transfer_stage_locked",
       transferId: rows[0]!.id,
+    });
+  }
+}
+
+/**
+ * A delivery with transfers closes only through its native review: every
+ * stage, including its own whole-delivery gate, must be completed by an
+ * approved decision bound to the manifest. The one exception is the stage the
+ * same native transition approves now; its decision is inserted later in this
+ * transaction, and assertReviewEligible checks its binding there.
+ */
+async function assertEveryDeliveryStageApproved(
+  tx: DbOrTx,
+  input: {
+    companyId: string;
+    issueId: string;
+    policy: IssueExecutionPolicy | null;
+    before: ReturnType<typeof parseIssueExecutionState>;
+    after: ReturnType<typeof parseIssueExecutionState>;
+    transferId: string;
+  },
+) {
+  const decidedNow = input.before?.status === "pending" && input.after?.lastDecisionOutcome === "approved"
+    && input.after.lastDecisionId !== input.before.lastDecisionId
+    ? input.before.currentStageId
+    : null;
+  const completed = new Set(input.after?.status === "completed" ? input.after.completedStageIds : []);
+  const approved = await tx
+    .select({ stageId: issueExecutionDecisions.stageId })
+    .from(issueExecutionDecisions)
+    .where(and(
+      eq(issueExecutionDecisions.companyId, input.companyId),
+      eq(issueExecutionDecisions.issueId, input.issueId),
+      eq(issueExecutionDecisions.outcome, "approved"),
+      isNotNull(issueExecutionDecisions.reviewManifestBinding),
+    ));
+  const approvedStageIds = new Set(approved.map((decision) => decision.stageId));
+  const stages = policyStages(input.policy);
+  const unapproved = stages.find((stage) => stage.id !== decidedNow && !approvedStageIds.has(stage.id))
+    ?? stages.find((stage) => !completed.has(stage.id));
+  if (unapproved) {
+    throw conflict("A delivery with transferred reviews closes only when the reviewer of each of its stages approves it.", {
+      code: "review_transfer_stage_unapproved",
+      transferId: input.transferId,
+      stageId: unapproved.id,
     });
   }
 }

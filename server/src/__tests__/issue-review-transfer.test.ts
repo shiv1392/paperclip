@@ -473,6 +473,105 @@ describeEmbeddedPostgres("issue review transfers", () => {
       await expectTransferIntact(fixture, transfer.id);
     });
 
+    describe("escalation budget", () => {
+      async function sourceWithRounds(fixture: Awaited<ReturnType<typeof seedDelivery>>, issueId: string, rounds: number) {
+        const [row] = await db.select().from(issues).where(eq(issues.id, issueId));
+        await db.update(issues)
+          .set({ executionState: { ...(row!.executionState as Record<string, unknown>), changesRequestedCount: rounds } })
+          .where(eq(issues.id, issueId));
+        const [after] = await db.select().from(issues).where(eq(issues.id, issueId));
+        return after!;
+      }
+
+      it("carries the source's used rounds onto the mapped stage and keeps them on replay", async () => {
+        const fixture = await seedDelivery();
+        const source = await sourceWithRounds(fixture, fixture.sourceId, 2);
+        const body = transferBody(fixture, { expectedSourceUpdatedAt: source.updatedAt.toISOString() });
+        const created = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(body).expect(201);
+        expect(created.body.transfer.obligation).toMatchObject({
+          changesRequestedCount: 2, maxReviewRounds: null, escalation: { maxReviewRounds: 3, escalationUserId: null },
+        });
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const stages = (parent!.executionPolicy as { stages: Array<Record<string, unknown>> }).stages;
+        expect(stages[0]).toMatchObject({ id: created.body.transfer.destinationStageId, carriedReviewRounds: 2 });
+        expect(stages[1]).toEqual(fixture.parentGate);
+
+        const replay = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`).send(body).expect(200);
+        expect(replay.body.transfer.id).toBe(created.body.transfer.id);
+        const [afterReplay] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(afterReplay!.executionPolicy).toEqual(parent!.executionPolicy);
+
+        await startParentReview(fixture);
+        const [started] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(started!.executionState).toMatchObject({
+          currentStageId: created.body.transfer.destinationStageId, changesRequestedCount: 2,
+        });
+        // The source keeps its own count as history.
+        const [sourceAfter] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        expect(sourceAfter!.executionState).toEqual(source.executionState);
+      });
+
+      it("keeps a separate carried budget for each transferred source", async () => {
+        const fixture = await seedDelivery();
+        const suiteStage = reviewStage(fixture.reviewerId);
+        await db.update(issues).set({
+          executionPolicy: { mode: "normal", commentRequired: true, stages: [suiteStage] },
+          executionState: {
+            status: "pending", currentStageId: suiteStage.id, currentStageIndex: 0, currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: fixture.reviewerId, userId: null },
+            returnAssignee: { type: "agent", agentId: fixture.builderId, userId: null }, reviewRequest: null,
+            completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: null, changesRequestedCount: 1,
+          },
+        }).where(eq(issues.id, fixture.suiteId));
+        const source = await sourceWithRounds(fixture, fixture.sourceId, 2);
+        const first = await request(createApp()).post(`/api/issues/${fixture.sourceId}/review-transfers`)
+          .send(transferBody(fixture, { expectedSourceUpdatedAt: source.updatedAt.toISOString() })).expect(201);
+        const [suite] = await db.select().from(issues).where(eq(issues.id, fixture.suiteId));
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const second = await request(createApp()).post(`/api/issues/${fixture.suiteId}/review-transfers`).send({
+          ...transferBody(fixture),
+          idempotencyKey: `transfer:${fixture.suiteId}`,
+          sourceStageId: suiteStage.id,
+          expectedSourceUpdatedAt: suite!.updatedAt.toISOString(),
+          expectedDestinationUpdatedAt: parent!.updatedAt.toISOString(),
+          removeBlocksIssueId: null,
+          requiredReceipts: { ...transferBody(fixture).requiredReceipts, childIssueIds: [fixture.suiteId] },
+        }).expect(201);
+        const [after] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const stages = (after!.executionPolicy as { stages: Array<Record<string, unknown>> }).stages;
+        expect(stages.map((stage) => [stage.id, stage.carriedReviewRounds ?? 0])).toEqual([
+          [second.body.transfer.destinationStageId, 1],
+          [first.body.transfer.destinationStageId, 2],
+          [fixture.parentGate.id, 0],
+        ]);
+      });
+
+      it.each([
+        ["a different round limit", { executionPolicy: "maxReviewRounds" }],
+        ["a different escalation human", { responsibleUserId: "other-escalation-owner" }],
+      ] as const)("refuses a source with %s and changes nothing", async (_label, change) => {
+        const fixture = await seedDelivery();
+        if ("executionPolicy" in change) {
+          await db.update(issues)
+            .set({ executionPolicy: { ...(fixture.source.executionPolicy as Record<string, unknown>), maxReviewRounds: 5 } })
+            .where(eq(issues.id, fixture.sourceId));
+        } else {
+          await db.update(issues).set({ responsibleUserId: change.responsibleUserId }).where(eq(issues.id, fixture.sourceId));
+        }
+        const [source] = await db.select().from(issues).where(eq(issues.id, fixture.sourceId));
+        const response = await request(createApp())
+          .post(`/api/issues/${fixture.sourceId}/review-transfers`)
+          .send(transferBody(fixture, { expectedSourceUpdatedAt: source!.updatedAt.toISOString() }))
+          .expect(422);
+        expect(errorCode(response)).toBe("review_transfer_escalation_unrepresentable");
+        expect(await db.select().from(issueReviewTransfers)).toHaveLength(0);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(parent!.executionPolicy).toEqual(fixture.parent.executionPolicy);
+        const edges = await db.select().from(issueRelations).where(eq(issueRelations.companyId, fixture.companyId));
+        expect(edges).toHaveLength(2);
+      });
+    });
+
     it("refuses to transfer a source review escalated to a human outside its stage", async () => {
       const fixture = await seedDelivery();
       const escalatedState = {

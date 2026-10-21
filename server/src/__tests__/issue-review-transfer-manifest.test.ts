@@ -320,6 +320,66 @@ describeEmbeddedPostgres("issue review transfer manifest", () => {
       });
     });
 
+    describe("closing the delivery after every mapped approval", () => {
+      async function mappedApproved() {
+        const seeded = await seedWithReceipts();
+        expect((await approveParent(seeded.fixture, "Approved transferred child review.")).status).toBe(200);
+        const [transfer] = await db.select().from(issueReviewTransfers);
+        expect(transfer!.status).toBe("satisfied");
+        return seeded;
+      }
+
+      it("refuses a second board user's override while the delivery's own gate is pending", async () => {
+        const { fixture } = await mappedApproved();
+        const [before] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        const response = await request(createApp({ ...board, userId: "other-board-user" }))
+          .patch(`/api/issues/${fixture.parentId}`)
+          .send({ status: "done", comment: "Override and close." })
+          .expect(409);
+        expect(errorCode(response)).toBe("review_transfer_stage_unapproved");
+        expect(response.body.details.stageId).toBe(fixture.parentGate.id);
+        const [after] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(after!.status).toBe("in_review");
+        expect(after!.executionState).toEqual(before!.executionState);
+        expect(await db.select().from(issueExecutionDecisions)).toHaveLength(1);
+      });
+
+      it("closes through the gate reviewer's bound approval", async () => {
+        const { fixture } = await mappedApproved();
+        expect((await approveParent(fixture, "Approved whole delivery.")).status).toBe(200);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(parent!.status).toBe("done");
+        const decisions = await db.select().from(issueExecutionDecisions);
+        expect(decisions.map((decision) => decision.stageId).sort()).toEqual(
+          [fixture.parentGate.id, (parent!.executionPolicy as { stages: Array<{ id: string }> }).stages[0]!.id].sort(),
+        );
+        expect(decisions.every((decision) => decision.reviewManifestBinding !== null)).toBe(true);
+      });
+
+      it("keeps one bound approval per stage when an override races the gate approval", async () => {
+        const { fixture } = await mappedApproved();
+        const manifest = await readManifest(fixture.parentId);
+        const [override, approval] = await Promise.all([
+          request(createApp({ ...board, userId: "other-board-user" }))
+            .patch(`/api/issues/${fixture.parentId}`)
+            .send({ status: "done", comment: "Override and close." }),
+          request(createApp(boardReviewer))
+            .patch(`/api/issues/${fixture.parentId}`)
+            .send({ status: "done", comment: "Approved whole delivery.", expectedReviewManifest: bindingFor(manifest) }),
+        ]);
+        expect(approval.status).toBe(200);
+        // The override either lost to the pending gate or arrived after the
+        // real approval completed the review; it never decides a stage.
+        expect([200, 409]).toContain(override.status);
+        if (override.status === 409) expect(errorCode(override)).toBe("review_transfer_stage_unapproved");
+        const decisions = await db.select().from(issueExecutionDecisions);
+        expect(decisions).toHaveLength(2);
+        expect(decisions.every((decision) => decision.actorUserId === "local-board" && decision.reviewManifestBinding)).toBe(true);
+        const [parent] = await db.select().from(issues).where(eq(issues.id, fixture.parentId));
+        expect(parent!.status).toBe("done");
+      });
+    });
+
     it("refuses a board override that would close the delivery before the moved review is decided", async () => {
       const { fixture } = await seedWithReceipts();
       const closed = await request(createApp({ ...board, userId: "other-board-user" }))
