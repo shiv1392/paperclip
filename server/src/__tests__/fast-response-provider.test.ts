@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiConnectionMetadata } from "@paperclipai/shared";
 import {
   fastResponsePrompt,
   fastResponseReceipt,
   runFastResponseProvider,
 } from "../services/fast-response-provider.js";
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 const ack =
   "I’ll check the settings panel’s border styling and work on the fix.";
 const chatResponse = () => ({
@@ -304,6 +307,8 @@ describe("fast response provider", () => {
       "Bearer fixture-key",
     ],
   ] as const)("supports Messages %j", async (metadata, url, header, key) => {
+    // The Anthropic SDK reads ANTHROPIC_BASE_URL when no route sets a base URL.
+    vi.stubEnv("ANTHROPIC_BASE_URL", undefined);
     const fetch = vi.fn(async () =>
       response({
         id: "msg_1",

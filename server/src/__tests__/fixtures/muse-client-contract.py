@@ -1,6 +1,7 @@
 """Exercise the shipped client with synthetic responses; never contacts a provider."""
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -551,7 +552,7 @@ urllib.request.build_opener = lambda *args: Opener()
 
     def test_http_errors_do_not_echo_url_or_credentials(self):
         sensitive_url = ORIGIN + "/api/muse/v1/queries"
-        error = urllib.error.HTTPError(sensitive_url, 401, "synthetic-private-provider-detail", {}, None)
+        error = urllib.error.HTTPError(sensitive_url, 401, "synthetic-private-provider-detail", {}, io.BytesIO(b""))
         with patch.object(client_module.HTTP, "open", side_effect=error):
             with self.assertRaises(RuntimeError) as raised:
                 client_module.http(sensitive_url, {"query": "identify"}, CREDENTIAL_NAME)

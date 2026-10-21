@@ -72,12 +72,17 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
   const adapterType = "codex_local";
   const oldHome = process.env.PAPERCLIP_HOME;
   let home: string;
+  // Managed runtime checks project auth from the agent cwd, or from
+  // process.cwd() when it is unset. Use a test-owned cwd so a host config
+  // in an ancestor of the checkout cannot leak into these runs.
+  let projectCwd: string;
 
   beforeAll(async () => {
     temporary = await startEmbeddedPostgresTestDatabase("heartbeat-execution-config-");
     db = createDb(temporary.connectionString);
     home = await mkdtemp(path.join(tmpdir(), "paperclip-execution-skills-"));
     process.env.PAPERCLIP_HOME = home;
+    projectCwd = await mkdtemp(path.join(tmpdir(), "paperclip-execution-project-"));
     heartbeat = heartbeatService(db);
     // Exercise real preparation for a managed-capable adapter without calling a provider.
     registerServerAdapter({
@@ -99,6 +104,7 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     await temporary?.cleanup();
     if (oldHome === undefined) delete process.env.PAPERCLIP_HOME; else process.env.PAPERCLIP_HOME = oldHome;
     if (home) await rm(home, { recursive: true, force: true });
+    if (projectCwd) await rm(projectCwd, { recursive: true, force: true });
   });
 
   async function seed(managed = false) {
@@ -114,7 +120,7 @@ describePostgres("heartbeat execution configuration through adapter dispatch", (
     }, credential) : null;
     await db.insert(projects).values({ id: projectId, companyId, name: "Config project", env: { SHARED_VALUE: "project", PROJECT_ONLY: "project-only" } });
     await db.insert(agents).values({ id: agentId, companyId, name: "Configuration reader", adapterType, status: "idle",
-      adapterConfig: { model: "agent-model", env: { SHARED_VALUE: "agent", AGENT_ONLY: "agent-only", ...(managed ? { OPENAI_API_KEY: "stale-agent-key" } : {}) } },
+      adapterConfig: { model: "agent-model", ...(managed ? { cwd: projectCwd } : {}), env: { SHARED_VALUE: "agent", AGENT_ONLY: "agent-only", ...(managed ? { OPENAI_API_KEY: "stale-agent-key" } : {}) } },
       runtimeConfig: account ? { aiConnection: { provider: "openai", method: "api_key", mode: "delegated", connectionId: account.connectionId, grantId: account.grantId } } : {},
     });
     await db.insert(issues).values({ id: issueId, companyId, projectId, title: "Configuration fixture", status: "todo", assigneeAgentId: agentId, responsibleUserId: userId, issueNumber: 1, assigneeAdapterOverrides: { adapterConfig: { model: "issue-model" } } });
