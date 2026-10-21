@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseEnvContents } from "dotenv";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   activityLog,
   agents,
@@ -446,7 +446,46 @@ function createWorkspaceOperationRecorderDouble() {
   return { recorder, operations };
 }
 
+// Keep host git and shell configuration out of the fixtures. A system gitconfig
+// (Apple Git ships init.defaultBranch=main) gives createTempRepo("master") a
+// stray main branch, and a user shell's startup files (~/.zshenv) can put a host
+// paperclipai CLI on PATH for provision commands run through resolveShell().
+const hermeticEnvKeys = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"] as const;
+const previousHermeticEnv = new Map<string, string | undefined>();
+let hermeticGitConfigDir: string | null = null;
+let previousShellForTest: string | undefined;
+
+beforeAll(async () => {
+  hermeticGitConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-runtime-gitconfig-"));
+  const globalConfigPath = path.join(hermeticGitConfigDir, "gitconfig");
+  await fs.writeFile(
+    globalConfigPath,
+    "[user]\n\tname = Paperclip Test\n\temail = paperclip@example.com\n[init]\n\tdefaultBranch = master\n",
+    "utf8",
+  );
+  for (const key of hermeticEnvKeys) previousHermeticEnv.set(key, process.env[key]);
+  process.env.GIT_CONFIG_GLOBAL = globalConfigPath;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.GIT_TERMINAL_PROMPT = "0";
+});
+
+afterAll(async () => {
+  for (const key of hermeticEnvKeys) {
+    const value = previousHermeticEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  if (hermeticGitConfigDir) await fs.rm(hermeticGitConfigDir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  previousShellForTest = process.env.SHELL;
+  process.env.SHELL = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+});
+
 afterEach(async () => {
+  if (previousShellForTest === undefined) delete process.env.SHELL;
+  else process.env.SHELL = previousShellForTest;
   await Promise.all(
     Array.from(leasedRunIds).map(async (runId) => {
       await releaseRuntimeServicesForRun(runId);
