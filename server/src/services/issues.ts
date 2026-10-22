@@ -155,6 +155,7 @@ import {
   authorizeNativeChatReviewPresentation,
   retryNativeChatReviewPresentation,
 } from "./native-runtime/native-chat-review-presentation.js";
+import { assertIssueDeletionKeepsTransfers, assertIssueUpdateKeepsTransfers } from "./issue-review-transfer.js";
 import {
   applyIssueExecutionPolicyTransition,
   buildInitialIssueMonitorFields,
@@ -11176,6 +11177,17 @@ export function issueService(db: Db) {
           });
           assertLegacyRunTaskOwnership(actorRun, receiptExisting);
         }
+        if (patch.status === "done" || patch.status === "cancelled" || patch.executionPolicy !== undefined
+          || patch.executionState !== undefined || patch.reviewPolicy !== undefined) {
+          await assertIssueUpdateKeepsTransfers(tx, {
+            companyId: existing.companyId,
+            issueId: id,
+            nextStatus: patch.status,
+            nextExecutionPolicy: patch.executionPolicy,
+            nextExecutionState: patch.executionState,
+            nextReviewPolicy: patch.reviewPolicy,
+          });
+        }
         if (actorAgentId && patch.status === "done") {
           const [review] = await tx.select({ id: toolActionRequests.id }).from(toolActionRequests).where(and(eq(toolActionRequests.companyId, existing.companyId), eq(toolActionRequests.issueId, id), inArray(toolActionRequests.status, ["pending", "approved", "executing"]))).limit(1);
           if (review) throw conflict("This task is waiting for a connection review. Finish unrelated work, then yield in_review without retrying the governed call.", { code: "tool_review_pending", actionRequestId: review.id });
@@ -11641,6 +11653,13 @@ export function issueService(db: Db) {
           .select({ documentId: issueDocuments.documentId })
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
+
+        const [locked] = await tx
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, id))
+          .for("update");
+        if (locked) await assertIssueDeletionKeepsTransfers(tx, { companyId: locked.companyId, issueId: id });
 
         let removedIssue;
         try {

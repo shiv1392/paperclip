@@ -248,6 +248,8 @@ import {
   // Issue recovery and decomposition
   createAcceptedPlanDecompositionSchema,
   resolveIssueRecoveryActionSchema,
+  requestIssueReviewTransferSchema,
+  attachIssueReviewTransferReceiptsSchema,
   recoverWorkspaceSchema,
   retryWorkspaceExportSchema,
   reconstructWorkspaceSchema,
@@ -1403,6 +1405,8 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "PUT /api/companies/{companyId}/observability",
   "DELETE /api/companies/{companyId}/observability",
   "POST /api/companies/{companyId}/observability/test",
+  "POST /api/issues/{id}/review-transfers",
+  "POST /api/review-transfers/{transferId}/receipts",
   ...browserUseOperations.map(([method, path]) => `${method.toUpperCase()} ${path}`),
   "GET /api/companies/{companyId}/ai-connections",
   "POST /api/companies/{companyId}/ai-connections",
@@ -4339,7 +4343,7 @@ registry.registerPath({
   tags: ["issues"],
   summary: "Delete an issue",
   request: { params: z.object({ id: z.string() }) },
-  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound, 409: r.conflict },
 });
 
 registry.registerPath({
@@ -10744,6 +10748,32 @@ registerCurrentRoute({
   tags: ["issues"],
   summary: "Resolve an issue recovery action",
   body: resolveIssueRecoveryActionSchema,
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/issues/{id}/review-transfers",
+  tags: ["issues"],
+  summary: "Move a child task's outstanding review to its top-level delivery (board only)",
+  body: requestIssueReviewTransferSchema,
+  responses: { 200: r.ok(), 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/issues/{id}/review-transfers",
+  tags: ["issues"],
+  summary: "Read transfers and the complete review manifest only when both sides of every transfer are readable",
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/review-transfers/{transferId}/receipts",
+  tags: ["issues"],
+  summary: "Attach versioned receipts to a review transfer (board only)",
+  body: attachIssueReviewTransferReceiptsSchema,
+  responses: { 200: r.ok(), 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
 });
 
 registerCurrentRoute({

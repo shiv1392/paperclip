@@ -15,6 +15,9 @@ import {
   prepareGitHubExecutionEnvironment,
   runAdapterExecutionTargetProcess,
 } from "./execution-target.js";
+import { isolateFromRunCredentials } from "./test-support/run-credential-isolation.js";
+
+isolateFromRunCredentials();
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -396,6 +399,8 @@ describe("managed GitHub launcher environment", () => {
     expect(isolated.PAPERCLIP_GITHUB_HOST_HOME).toBeUndefined();
   });
 
+  // Each layout runs two bounded agent launches and several control shells.
+  // Keep the agent-launch deadlines; budget the full fixture separately.
   it.each(["nvm/current/bin", "usr/local/bin", "tools with 'quotes'/bin"])(
     "preserves %s CLIs and keeps GitHub wrappers first in child shells",
     async (layout) => {
@@ -427,6 +432,7 @@ describe("managed GitHub launcher environment", () => {
       expect(github.exitCode, github.stderr).toBe(0);
       expect(github.stdout).toBe("git started\ngh started\n");
     },
+    20_000,
   );
 
   it("preserves an explicit remote PATH without querying the remote environment", async () => {

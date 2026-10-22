@@ -423,6 +423,10 @@ describe("claude execute", () => {
     ["  ", "claude-opus-5-5"],
     ["claude-sonnet-4-5", "claude-sonnet-4-5"],
   ])("passes the resolved model to the CLI for %j", async (model, expected) => {
+    // The default applies only when the host selects no model or provider.
+    for (const key of ["ANTHROPIC_MODEL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BEDROCK_BASE_URL"]) {
+      vi.stubEnv(key, undefined);
+    }
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-default-"));
     const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
     try {
@@ -440,6 +444,7 @@ describe("claude execute", () => {
       const { argv } = JSON.parse(await fs.readFile(capturePath, "utf8"));
       expect(argv[argv.indexOf("--model") + 1]).toBe(expected);
     } finally {
+      vi.unstubAllEnvs();
       restore();
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -397,6 +397,7 @@ export const issueExecutionStageSchema = z.object({
   type: z.enum(ISSUE_EXECUTION_STAGE_TYPES),
   approvalsNeeded: z.literal(1).optional().default(1),
   participants: z.array(issueExecutionStageParticipantSchema).default([]),
+  carriedReviewRounds: z.number().int().nonnegative().max(50).optional(),
 });
 
 export const issueExecutionMonitorPolicySchema = z.object({
@@ -526,6 +527,64 @@ export const issueExecutionStateSchema = z.object({
   monitor: issueExecutionMonitorStateSchema.optional().nullable(),
   changesRequestedCount: z.number().int().nonnegative().optional().default(0),
 });
+
+/** A full SHA-1 or SHA-256 Git object id. */
+const gitObjectIdSchema = z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/);
+
+export const requestIssueReviewTransferSchema = z
+  .object({
+    idempotencyKey: z.string().trim().min(1).max(200),
+    sourceStageId: z.string().guid(),
+    destinationIssueId: z.string().guid(),
+    expectedSourceUpdatedAt: z.string().datetime(),
+    expectedDestinationUpdatedAt: z.string().datetime(),
+    removeBlocksIssueId: z.string().guid().optional().nullable(),
+    reason: z.string().trim().min(1).max(2000),
+    requiredReceipts: z
+      .object({
+        commands: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+        /** Delivery base and source implementation pinned at transfer; receipts must match them. */
+        originalBase: gitObjectIdSchema,
+        sourceCommit: gitObjectIdSchema,
+        sourceTree: gitObjectIdSchema,
+        /** Child tasks whose results must be in the final head; must include the source. */
+        childIssueIds: z.array(z.string().guid()).min(1).max(50),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type RequestIssueReviewTransfer = z.infer<typeof requestIssueReviewTransferSchema>;
+
+export const attachIssueReviewTransferReceiptsSchema = z
+  .object({
+    idempotencyKey: z.string().trim().min(1).max(200),
+    expectedReceiptRevision: z.string().guid().nullable(),
+    source: z.object({ issueId: z.string().guid(), stageId: z.string().guid(), commit: gitObjectIdSchema, tree: gitObjectIdSchema }).strict(),
+    destination: z.object({ originalBase: gitObjectIdSchema, finalHead: gitObjectIdSchema, finalTree: gitObjectIdSchema }).strict(),
+    childResults: z
+      .array(z.object({ issueId: z.string().guid(), commit: gitObjectIdSchema, includedInFinalHead: z.boolean() }).strict())
+      .min(1)
+      .max(50),
+    commands: z
+      .array(z.object({
+        command: z.string().trim().min(1).max(500),
+        exitCode: z.number().int(),
+        logSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        testedTree: gitObjectIdSchema,
+      }).strict())
+      .min(1)
+      .max(20),
+  })
+  .strict();
+
+export type AttachIssueReviewTransferReceipts = z.infer<typeof attachIssueReviewTransferReceiptsSchema>;
+
+export const expectedReviewManifestSchema = z
+  .object({ revision: z.string().guid(), finalHead: gitObjectIdSchema, finalTree: gitObjectIdSchema })
+  .strict();
+
+export type ExpectedReviewManifest = z.infer<typeof expectedReviewManifestSchema>;
 
 export const issueRecoveryActionReadModelSchema = z.object({
   id: z.string().guid(),
@@ -932,6 +991,11 @@ export const updateIssueSchema = objectWithoutDefaults(
     expectedStatusVersion: z.number().int().nonnegative().optional(),
     /** Reject a policy write if the policy changed after the caller read it. */
     expectedExecutionPolicy: z.record(z.string(), z.unknown()).optional().nullable(),
+    /**
+     * Required to approve a stage on a delivery with transferred reviews: the
+     * exact manifest from GET /issues/:id/review-transfers that was reviewed.
+     */
+    expectedReviewManifest: expectedReviewManifestSchema.optional(),
     requestDepth: issueRequestDepthInputSchema.optional(),
     assigneeAgentId: z.string().trim().min(1).optional().nullable(),
     comment: multilineTextSchema.pipe(z.string().min(1)).optional(),

@@ -150,6 +150,14 @@ If `currentParticipant` matches you, submit your decision via the normal update 
 - Approve: `PATCH /api/issues/{issueId}` with `{ "status": "done", "comment": "Approved: …" }`. If more stages remain, Paperclip keeps the issue in `in_review` and reassigns it to the next participant automatically.
 - Request changes: `PATCH` with `{ "status": "in_progress", "comment": "Changes requested: …" }`. Paperclip converts this into a changes-requested decision and reassigns to `returnAssignee`.
 
+**Delivery with transferred reviews.** If the issue received review transfers, approval of any stage on it must name the exact review manifest you reviewed:
+
+1. Read `GET /api/issues/{issueId}/review-transfers`. Check that `manifest.valid` is `true`, `manifest.problems` is empty, and every transfer has its receipts.
+2. Inspect the actual `originalBase`, `finalHead` and `finalTree` in the source. The server stores attested receipts; it does not read Git.
+3. Approve with `PATCH /api/issues/{issueId}` and `{ "status": "done", "comment": "Approved: …", "expectedReviewManifest": { "revision": "<manifest.revision>", "finalHead": "<sha>", "finalTree": "<sha>" } }`, using the values you inspected.
+
+A missing binding returns `422 review_manifest_binding_required`. A changed manifest returns `409 review_manifest_stale`. On either error, read the manifest again and review the change. Do not resend the new values without a new review. Comments, recovery actions and the board UI cannot approve a delivery with transfers. Requests for changes and approvals on issues without transfers do not need a binding.
+
 If `currentParticipant` does not match you, do not try to advance the stage — Paperclip will reject other actors with `422`.
 
 **Step 7 — Do the work.** Use your tools and capabilities. Execution contract:

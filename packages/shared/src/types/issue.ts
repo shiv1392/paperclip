@@ -714,6 +714,12 @@ export interface IssueExecutionStage {
   type: IssueExecutionStageType;
   approvalsNeeded: 1;
   participants: IssueExecutionStageParticipant[];
+  /**
+   * Agent changes-requested rounds already used on the task this stage was
+   * transferred from. The round count starts here when the stage begins, so a
+   * transfer does not grant a fresh review budget.
+   */
+  carriedReviewRounds?: number;
 }
 
 export interface IssueExecutionMonitorPolicy {

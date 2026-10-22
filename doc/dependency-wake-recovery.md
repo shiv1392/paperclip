@@ -17,3 +17,11 @@ Cancelling a run or pausing its agent suppresses immediate stranded-work recover
 A queued user message remains a separate continuation request. The release path
 still preserves independently authorized deferred input; stopping the old run
 does not discard that input or grant permission to replay its old tools.
+
+A child task whose review moved to its delivery stays held for that reviewer.
+Removing a circular blocker in the same transfer makes a sibling eligible to
+run, for example to produce a final-suite receipt. The transfer records an
+activity entry on that sibling but does not wake it; its next normal admission
+can start. The transfer never wakes the held reviewer.
+Recovery sweeps treat the hold as a durable wait. See Review Transfer in
+`doc/execution-semantics.md`.

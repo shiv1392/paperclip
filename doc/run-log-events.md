@@ -420,6 +420,18 @@ section in the Observability contract.
 
 ## Execution recovery
 
+A run that stops before it starts can leave a pending review stage behind. If
+the current agent reviewer is the assignee and the recorded return owner, a
+board operator can record `executionReconciliation` with
+`actionOutcome: "not_performed"` and `sourceIssueStatus: "in_review"`. The run
+must never have started. The task then returns to the same pending stage and
+reviewer. Recovery does not record a decision or reset the stage. The existing
+delivery identity wakes the reviewer. Other requests fail with
+`review_resume_not_eligible` or `review_resume_run_started`. A `todo` hand-back
+still cannot bypass a pending stage. Agents cannot record reconciliation. The
+usual lease, run lock, approval, pause, budget, owner and blocker checks still
+apply.
+
 Cancelled runs retain `resultJson.cancellation`: a closed `source` label
 (`operator`, `queued_message`, `shutdown`, `provider`, `transport`,
 `control_plane`, `controller_lease`, or `unknown`), whether the stop was expected,

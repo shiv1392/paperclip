@@ -79,12 +79,18 @@ API: `present` — representative operation IDs:
 
 - `PATCH /api/issues/{id}`.
 - `POST /api/issues/{id}/interactions`.
+- `POST /api/issues/{id}/review-transfers`, `POST /api/review-transfers/{transferId}/receipts`,
+  `GET /api/issues/{id}/review-transfers`.
 
 Agent access: `partial` — Native paperclip_finish/paperclip_block and assigned
-resolve_review; legacy agent REST disposition.
+resolve_review; legacy agent REST disposition. Review transfer and receipts are
+`operator-only`; agents can read transfers only when they can read both sides of
+every transfer in the returned set. An unreadable counterpart returns 404 for the
+whole set; the API does not return a partial manifest.
 
 Policy: Task visibility/mutation, task-assignment and ownership policy; review audience
-independent; tree controls board-only.
+independent; tree controls board-only. Review transfer requires a board actor with
+company access and `issue:mutate` on the source and the delivery, checked separately. Task-level verdict restrictions and custom trust controls are unsupported and fail closed. Transferred tasks keep their verdict, trust and escalation authority.
 
 Evidence: `source-only` —
 [implementation](../../server/src/routes/issue-tree-control.ts#L95) at the reviewed
@@ -95,8 +101,16 @@ credentials/run context; inspect its result and applicable persistence/attributi
 Assert the relevant denied actor, owner, company or mode from Policy. Review the
 remaining operations before qualifying the whole capability.
 
+Approving any stage on a delivery with transfers needs `expectedReviewManifest`
+(`revision`, `finalHead`, `finalTree`) on `PATCH /api/issues/{id}`, copied from the
+manifest in `GET /api/issues/{id}/review-transfers` that the reviewer inspected. A
+missing binding returns 422; a changed manifest returns 409, and the reviewer re-reads
+and re-reviews before approving again.
+
 Gaps: Review policy determines final completion; formal board approval is a different
-boundary.
+boundary. Transferred-review receipts are attested by the board, not read from Git. The
+board UI, comments and recovery actions do not send the binding, so they cannot approve a
+delivery with transfers (fail-closed 422).
 
 ## `tree-control`
 

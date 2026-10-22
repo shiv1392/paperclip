@@ -301,7 +301,9 @@ async function runReleaseDrain(
       await ports.transaction.cancelDeferredWake({
         companyId: run.companyId,
         wakeId: workingCandidate.id,
-        reason: "Deferred wake suppressed by active subtree pause hold",
+        reason: pauseHold.mode === "review_transfer"
+          ? "Deferred wake suppressed because this review moved to the delivery"
+          : "Deferred wake suppressed by active subtree pause hold",
         now: input.now,
       });
       continue;
@@ -539,6 +541,7 @@ async function runReleaseRecoveryTail(
       ? await transaction.isAutomaticRecoverySuppressedByPauseHold({
           companyId: issue.companyId,
           issueId: issue.id,
+          agentId: run.agentId,
         })
       : false;
 

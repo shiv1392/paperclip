@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { parse as parseEnvContents } from "dotenv";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   activityLog,
   agents,
@@ -446,19 +446,82 @@ function createWorkspaceOperationRecorderDouble() {
   return { recorder, operations };
 }
 
+// Keep host git and shell configuration out of the fixtures. A system gitconfig
+// (Apple Git ships init.defaultBranch=main) gives createTempRepo("master") a
+// stray main branch, and a user shell's startup files (~/.zshenv) can put a host
+// paperclipai CLI on PATH for provision commands run through resolveShell().
+const hermeticEnvKeys = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"] as const;
+const previousHermeticEnv = new Map<string, string | undefined>();
+let hermeticGitConfigDir: string | null = null;
+let previousShellForTest: string | undefined;
+let previousPathForTest: string | undefined;
+let hermeticToolPath: string;
+
+beforeAll(async () => {
+  hermeticGitConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-runtime-gitconfig-"));
+  const toolBin = path.join(hermeticGitConfigDir, "bin");
+  await fs.mkdir(toolBin);
+  await fs.symlink(process.execPath, path.join(toolBin, "node"));
+  const searchPath = (process.env.PATH ?? "").split(path.delimiter);
+  for (const command of ["pnpm", "corepack"]) {
+    const commandPath = searchPath.map((directory) => path.join(directory, command)).find(existsSync);
+    if (!commandPath) {
+      if (command === "pnpm") throw new Error("Workspace provisioning tests require pnpm");
+      continue;
+    }
+    const quotedCommandPath = (await fs.realpath(commandPath)).replaceAll("'", "'\\''");
+    await fs.writeFile(path.join(toolBin, command), `#!/bin/sh\nexec '${quotedCommandPath}' "$@"\n`, { mode: 0o755 });
+  }
+  // Exercise the script's fallback writer, not a paperclipai installed on the host.
+  // Individual CLI fixtures prepend their own fake commands when needed.
+  hermeticToolPath = [toolBin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter);
+  const globalConfigPath = path.join(hermeticGitConfigDir, "gitconfig");
+  await fs.writeFile(
+    globalConfigPath,
+    "[user]\n\tname = Paperclip Test\n\temail = paperclip@example.com\n[init]\n\tdefaultBranch = master\n",
+    "utf8",
+  );
+  for (const key of hermeticEnvKeys) previousHermeticEnv.set(key, process.env[key]);
+  process.env.GIT_CONFIG_GLOBAL = globalConfigPath;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.GIT_TERMINAL_PROMPT = "0";
+});
+
+afterAll(async () => {
+  for (const key of hermeticEnvKeys) {
+    const value = previousHermeticEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  if (hermeticGitConfigDir) await fs.rm(hermeticGitConfigDir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  previousPathForTest = process.env.PATH;
+  process.env.PATH = hermeticToolPath;
+  previousShellForTest = process.env.SHELL;
+  process.env.SHELL = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+});
+
 afterEach(async () => {
+  if (previousPathForTest === undefined) delete process.env.PATH;
+  else process.env.PATH = previousPathForTest;
+  if (previousShellForTest === undefined) delete process.env.SHELL;
+  else process.env.SHELL = previousShellForTest;
   await Promise.all(
     Array.from(leasedRunIds).map(async (runId) => {
       await releaseRuntimeServicesForRun(runId);
       leasedRunIds.delete(runId);
     }),
   );
+  // Assertions may keep manual services alive; suite teardown must stop them.
+  // Keep the test's home and exposure fake active while releasing its services.
+  await resetRuntimeServicesForTests({ terminateProcesses: true });
   delete process.env.PAPERCLIP_CONFIG;
   delete process.env.PAPERCLIP_HOME;
   delete process.env.PAPERCLIP_INSTANCE_ID;
   delete process.env.PAPERCLIP_WORKTREES_DIR;
   delete process.env.DATABASE_URL;
-  await resetRuntimeServicesForTests();
   // Registry reset does not clear the process-local allocation claims. A
   // failed-start fixture must not reserve another test's ephemeral port.
   resetRuntimeServicePortReservationsForTests();

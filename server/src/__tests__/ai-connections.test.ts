@@ -349,7 +349,7 @@ describe("managed AI connections", () => {
     const [row] = await service.quotaAccounts(companyId, owner);
     const probe = vi.fn().mockResolvedValue("ok");
     const input = { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local",
-      binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: {} };
+      binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { cwd: home } };
     const failure = Object.assign(new Error("injected private lock diagnostic"), { code: kind === "timeout" ? WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE : "EACCES" });
     const lock = vi.spyOn(codexAdapter, "withAccountHomeSecretMutationLock").mockRejectedValueOnce(failure);
     try {
@@ -375,7 +375,7 @@ describe("managed AI connections", () => {
     const entered = deferredSignal(), release = deferredSignal();
     const request = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Quota must not exchange the probe's token"));
     const probing = withManagedAiProbe(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local",
-      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} }, async runtime => {
+      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } }, async runtime => {
       entered.resolve(); await release.promise;
       await writeFile(path.join(String(runtime.config.env.CODEX_HOME), "auth.json"), auth("11"));
     });
@@ -419,7 +419,7 @@ describe("managed AI connections", () => {
     let managedHome: string | undefined;
     try {
       const result = await withManagedAiProbe(db, { companyId, agentId, responsibleUserId: owner, adapterType: "paperclip_runner",
-        binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { provider: "codex" } }, async runtime => {
+        binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { provider: "codex", cwd: home } }, async runtime => {
         managedHome = runtime.home;
         return testNativeRunnerAuthentication({ companyId, adapterType: "paperclip_runner", config: runtime.config, managedAiCredentialHome: path.join(runtime.home!, "provider") }, "codex", "gpt-5.6-sol");
       });
@@ -440,7 +440,7 @@ describe("managed AI connections", () => {
     const definition = await secretService(db).createUserSecretDefinition(companyId, { key: "replacement_credential", name: "Replacement", provider: "local_encrypted" }, { userId: owner });
     const replacement = await secretService(db).createCurrentUserSecretValue(companyId, owner, { definitionId: definition.id, value: auth("new-account") }, { userId: owner });
     const prepare = () => prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local",
-      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
     const original = codexAdapter.withAccountHomeSecretMutationLock;
     const lock = vi.spyOn(codexAdapter, "withAccountHomeSecretMutationLock").mockImplementationOnce(async (env, company, callback) => {
       await db.update(connectionGrants).set({ credentialSecretRefs: row.grant.credentialSecretRefs.map(ref => ref.configPath === "ai.credential" ? { ...ref, secretId: replacement.id } : ref) }).where(eq(connectionGrants.id, row.grant.id));
@@ -557,7 +557,7 @@ describe("managed AI connections", () => {
     const [row] = await service.quotaAccounts(companyId, owner);
     const ref = row.grant.credentialSecretRefs.find(ref => ref.configPath === "ai.credential")!;
     const prepare = () => prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local",
-      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
     const held = deferredSignal(), release = deferredSignal();
     const lock = kind === "company_file" ? vi.spyOn(codexAdapter, "withAccountHomeSecretMutationLock")
       .mockRejectedValueOnce(Object.assign(new Error("company lock held by another account"), { code: WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE })) : undefined;
@@ -587,7 +587,7 @@ describe("managed AI connections", () => {
     await service.save(companyId, owner, { provider: "openai", method: "subscription", ownership: "personal", name: owner, loginSessionId: "fixture", agentIds: [], allAgents: true }, auth("old"));
     const [row] = await service.quotaAccounts(companyId, owner);
     const prepare = () => prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local",
-      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+      binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
     const oldRun = await prepare();
     const ref = row.grant.credentialSecretRefs.find(ref => ref.configPath === "ai.credential")!;
     const journal = quotaCredentialRecovery(companyId, row.grant.id);
@@ -756,7 +756,7 @@ describe("managed AI connections", () => {
     const [quotaRow] = await service.quotaAccounts(companyId, quotaOwner);
     // Runtime credential reads now serialize with quota exchanges. Prepare this
     // already-running, different account before testing its contended write-back.
-    const preparedRun = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: runOwner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+    const preparedRun = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: runOwner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
     const started = deferredSignal(), release = deferredSignal();
     const request = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       started.resolve(); await release.promise;
@@ -850,7 +850,7 @@ describe("managed AI connections", () => {
       await recovery.write({ companyId, grantId: row.grant.id, connectionId: row.connection.id, secretId: ref.secretId, baseHash: quotaCredentialHash(auth("old", 10)), value: auth("fresh", 11) });
       expect(await service.runtimeCredential(row)).toBe(auth("fresh", 11));
     } else {
-      const runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+      const runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
       await writeFile(path.join(String(runtime.config.env.CODEX_HOME), "auth.json"), auth("fresh", 11));
       await runtime.cleanup();
     }
@@ -871,7 +871,7 @@ describe("managed AI connections", () => {
     await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
     const auth = (hour: string) => JSON.stringify({ tokens: { account_id: owner, id_token: "identity", access_token: `access-${hour}`, refresh_token: `refresh-${hour}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     await service.save(companyId, owner, { provider: "openai", method: "subscription", ownership: "personal", name: owner, loginSessionId: "fixture", agentIds: [], allAgents: true }, auth("10"));
-    const run = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+    const run = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
     const authFile = path.join(String(run.config.env.CODEX_HOME), "auth.json");
     await writeFile(authFile, auth("11"));
     const injected = failure === "lock"
@@ -908,7 +908,7 @@ describe("managed AI connections", () => {
       await exchangeStarted.promise;
       const edit = secretService(db).update(secretId, { description: "Changed during refresh" });
       lock = vi.spyOn(codexAdapter, "withAccountHomeSecretMutationLock");
-      const preparing = prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: {} });
+      const preparing = prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "codex_local", binding: { provider: "openai", method: "subscription", mode: "responsible_user" }, config: { cwd: home } });
       // Runtime reads now wait at the company file lock before touching the
       // old credential. The returned home must contain the committed rotation.
       let prepared = false;
@@ -970,7 +970,7 @@ describe("managed AI connections", () => {
       routing: { kind: "local", protocol, baseUrl: "http://127.0.0.1:9000/v1", auth: "none", models: [] },
     }, "");
     const binding = { provider, method: "api_key", mode: "connection", connectionId: account.connectionId, grantId: account.grantId } as const;
-    const config = { model: "fixture-model", env: { OPENAI_API_KEY: "host-key", ANTHROPIC_API_KEY: "host-key" } };
+    const config = { model: "fixture-model", cwd: home, env: { OPENAI_API_KEY: "host-key", ANTHROPIC_API_KEY: "host-key" } };
     const first = await prepareManagedAiRuntime(db, { ...input, adapterType, responsibleUserId: "alice", binding, config });
     const second = await prepareManagedAiRuntime(db, { ...input, adapterType, responsibleUserId: "alice", binding, config });
     try {
@@ -1183,7 +1183,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await expect(service.select({ ...input, binding: selected, userId: "bob", adapterType: "codex_local", model: "openai/gpt-5.4" })).rejects.toThrow("not shared");
     await expect(service.select({ ...input, companyId: otherCompanyId, binding: selected, userId: "alice", adapterType: "codex_local" })).rejects.toThrow();
     for (const adapterType of ["codex_local", "paperclip_runner"]) {
-      const runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: "alice", binding: selected, adapterType, config: { provider: "codex", model: "openai/gpt-5.4", env: { OPENAI_API_KEY: "ambient" } } });
+      const runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: "alice", binding: selected, adapterType, config: { provider: "codex", model: "openai/gpt-5.4", cwd: home, env: { OPENAI_API_KEY: "ambient" } } });
       try {
         expect(runtime.config.env.OPENAI_API_KEY).toBe("");
         expect(runtime.config.env.PAPERCLIP_AI_PROVIDER_KEY).toBe("fixture-routed-credential");
@@ -1270,7 +1270,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await db.insert(agents).values({ id, companyId, name: "Auth recovery", adapterType, runtimeConfig: { aiConnection: selectedBinding } });
     await db.insert(issues).values({ id: issueId, companyId, title: "Fix provider login", status: "in_progress", assigneeAgentId: id });
     const account = await service.save(companyId, userId, { provider, method: "api_key", ownership: "personal", name: "Recovery account", apiKey: "fixture", agentIds: [id], allAgents: false }, "fixture-recovery-key");
-    const runtime = await prepareManagedAiRuntime(db, { companyId, agentId: id, responsibleUserId: userId, adapterType, binding: selectedBinding, config: {} });
+    const runtime = await prepareManagedAiRuntime(db, { companyId, agentId: id, responsibleUserId: userId, adapterType, binding: selectedBinding, config: { cwd: home } });
     await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId: id, status: "failed", errorCode: "acpx_auth_required", responsibleUserId: userId,
       contextSnapshot: { issueId, aiConnection: { ...runtime.attribution, identity: runtime.identity } } });
     await runtime.cleanup();
@@ -1414,7 +1414,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     const subscription = await service.save(companyId, subscriptionUser, { provider, method: "subscription", ownership: "personal", name: "Subscription", loginSessionId: "fixture", allAgents: true, agentIds: [] }, token);
     const api = await service.save(companyId, apiUser, { provider, method: "api_key", ownership: "personal", name: "API", apiKey: "fixture", allAgents: true, agentIds: [] }, "fixture-api");
     // This is the exact same saved bot config, including a legacy setup method.
-    const bot = { ...input, adapterType, binding: { provider, method: "subscription", mode: "responsible_user" } as const, config: { model: "unchanged-model", env: { [apiEnv]: "ambient", CLAUDE_CODE_OAUTH_TOKEN: "ambient" } } };
+    const bot = { ...input, adapterType, binding: { provider, method: "subscription", mode: "responsible_user" } as const, config: { model: "unchanged-model", cwd: home, env: { [apiEnv]: "ambient", CLAUDE_CODE_OAUTH_TOKEN: "ambient" } } };
     const original = structuredClone(bot);
     const [subRun, apiRun] = await Promise.all([subscriptionUser, apiUser].map(responsibleUserId => prepareManagedAiRuntime(db, { ...bot, responsibleUserId })));
     try {
@@ -1699,7 +1699,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
       adapterType: "codex_local",
       responsibleUserId: userId,
       binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const,
-      config: {},
+      config: { cwd: home },
     };
     // A parent can create and assign a child before its own execution ends.
     // Both runs select the same personal subscription, even on the same agent.
@@ -1719,7 +1719,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     const intent = { provider: "openai" as const, method: "subscription" as const, name: "Refresh test", ownership: "personal" as const, agentIds: [], allAgents: true, loginSessionId: "fixture" };
     const saved = await service.save(companyId, "alice", intent, auth("first", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: "alice", binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: "alice", binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model", cwd: home } };
     const first = await prepareManagedAiRuntime(db, runInput);
     await writeFile(path.join(String(first.config.env.CODEX_HOME), "auth.json"), auth("refreshed", 11));
     await first.cleanup();
@@ -1740,7 +1740,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
     const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     await service.save(companyId, userId, { provider: "openai", method: "subscription", ownership: "personal", name: "Freshness fixture", loginSessionId: "fixture", allAgents: true, agentIds: [] }, auth("start", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model", cwd: home } };
     // Two runs use the same OpenAI subscription grant at the same time.
     // Neither call below throws ai_connection_busy.
     const older = await prepareManagedAiRuntime(db, runInput);
@@ -1759,7 +1759,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
     const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     await service.save(companyId, userId, { provider: "openai", method: "subscription", ownership: "personal", name: "Reverse freshness fixture", loginSessionId: "fixture", allAgents: true, agentIds: [] }, auth("start", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model", cwd: home } };
     // Two runs use the same OpenAI subscription grant at the same time.
     // Neither call below throws ai_connection_busy.
     const older = await prepareManagedAiRuntime(db, runInput);
@@ -1799,7 +1799,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
     const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     const saved = await service.save(companyId, userId, { provider: "openai", method: "subscription", ownership: "personal", name: "Revocation fixture", loginSessionId: "fixture", allAgents: true, agentIds: [] }, auth("start", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model", cwd: home } };
     const run = await prepareManagedAiRuntime(db, runInput);
     const [grantBeforeCleanup] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, saved.grantId));
     const ref = grantBeforeCleanup.credentialSecretRefs.find(r => r.configPath === "ai.credential")!;
@@ -1820,7 +1820,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
     const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
     const saved = await service.save(companyId, userId, { provider: "openai", method: "subscription", ownership: "personal", name: "Credential lock race fixture", loginSessionId: "fixture", allAgents: true, agentIds: [] }, auth("start", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: userId, binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model", cwd: home } };
     const run = await prepareManagedAiRuntime(db, runInput);
     // The run's own refresh looks newer than the value it started with, but
     // it must lose to a company-authorized rotation that commits while
@@ -2087,7 +2087,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", result: "hello"
     const [environment] = await db.insert(environments).values({ name: `Adoption sandbox ${inline}`, driver: "sandbox", config: { provider: "daytona" } }).returning();
     await settings.update({ defaultEnvironmentId: environment.id });
     const id = randomUUID();
-    await db.insert(agents).values({ id, companyId, name: "Runner adoption", adapterType: "paperclip_runner", adapterConfig: { provider: "codex", model: "gpt-5.6-sol" } });
+    await db.insert(agents).values({ id, companyId, name: "Runner adoption", adapterType: "paperclip_runner", adapterConfig: { provider: "codex", model: "gpt-5.6-sol", cwd: home } });
     const account = await service.save(companyId, "alice", { provider: "openai", method: "api_key", ownership: "personal", name: "Runner adoption account", apiKey: "fixture-adoption-key", agentIds: inline ? [] : [id], allAgents: false }, "fixture-adoption-key");
     await service.setDefault(companyId, "alice", account.grantId);
     const tryDeliver = vi.fn(async (interactionId: string) => {

@@ -18,7 +18,7 @@ export function isPreDispatchReviewWait(
     (run.resultJson?.preDispatchResponseWait as { version?: number; providerWorkStarted?: boolean } | undefined)?.version === 1 &&
     (run.resultJson?.preDispatchResponseWait as { providerWorkStarted?: boolean } | undefined)?.providerWorkStarted === false;
   return run.runtimeMode === "legacy" && run.status === "cancelled" &&
-    (run.errorCode === "issue_continuation_waiting_on_review" ||
+    (run.errorCode === "issue_continuation_waiting_on_review" || run.errorCode === "issue_review_transferred" ||
       (run.errorCode === "issue_waiting_for_response" &&
         run.contextSnapshot?.connectionIntentResolution === "existing_connection" &&
         run.contextSnapshot?.source === "connection_intent.resolved" &&

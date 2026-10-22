@@ -66,6 +66,7 @@ const apiPrefixes: Record<string, string> = {
   "instance-database-backups.ts": "/api",
   "instance-settings.ts": "/api",
   "issues.ts": "/api",
+  "issue-review-transfers.ts": "/api",
   "issue-tree-control.ts": "/api",
   "llms.ts": "/api",
   "managed-agent-profiles.ts": "/api",
@@ -423,6 +424,19 @@ describe("openapi routes", () => {
     expect(test.responses["409"]).toBeDefined();
     expect(JSON.stringify(settings.get.responses)).not.toMatch(/credentialsSecretId|ciphertext|apiKey/);
     expect(test.responses["200"].content["application/json"].schema.properties.source).toMatchObject({ enum: ["control_plane"] });
+  });
+
+  it("documents review transfer writes as board only and issue deletion conflicts", () => {
+    const { spec } = loadSpecRoutes();
+    for (const operation of [
+      spec.paths["/api/issues/{id}/review-transfers"].post,
+      spec.paths["/api/review-transfers/{transferId}/receipts"].post,
+    ]) {
+      expect(operation.security).toEqual([{ BoardSessionAuth: [] }, { BoardApiKeyAuth: [] }]);
+      expect(operation["x-paperclip-authorization"]).toEqual({ actor: "board" });
+    }
+    expect(spec.paths["/api/issues/{id}/review-transfers"].get["x-paperclip-authorization"]).toEqual({ actor: "board_or_agent" });
+    expect(spec.paths["/api/issues/{id}"].delete.responses["409"]).toBeDefined();
   });
 
   it("documents personal board-only announcements and private responses", () => {

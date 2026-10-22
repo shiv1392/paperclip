@@ -2,12 +2,21 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doctor } from "../commands/doctor.js";
 import { writeConfig } from "../config/store.js";
 import type { PaperclipConfig } from "../config/schema.js";
 
+// Doctor probes the background service. Keep it away from the host's real
+// launchd/systemd service so the test never reads or controls it.
+const detectServiceManagerMock = vi.hoisted(() => vi.fn());
+vi.mock("../services/service-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/service-manager.js")>()),
+  detectServiceManager: detectServiceManagerMock,
+}));
+
 const ORIGINAL_ENV = { ...process.env };
+let hostRoot: string | undefined;
 
 async function availablePort(): Promise<number> {
   const server = net.createServer();
@@ -92,10 +101,19 @@ describe("doctor", () => {
     delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
     delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
     delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+    delete process.env.PAPERCLIP_SHIM_PATH;
+    delete process.env.PAPERCLIP_SERVICE_MANAGED;
+    hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-host-"));
+    process.env.HOME = path.join(hostRoot, "home");
+    process.env.PAPERCLIP_HOME = path.join(hostRoot, "paperclip");
+    detectServiceManagerMock.mockReset();
+    detectServiceManagerMock.mockResolvedValue({ supported: false, reason: "service manager disabled in tests" });
   });
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    if (hostRoot) fs.rmSync(hostRoot, { recursive: true, force: true });
+    hostRoot = undefined;
   });
 
   it("re-runs repairable checks so repaired failures do not remain blocking", async () => {
@@ -110,5 +128,6 @@ describe("doctor", () => {
     expect(summary.failed).toBe(0);
     expect(summary.warned).toBe(0);
     expect(process.env.PAPERCLIP_AGENT_JWT_SECRET).toBeTruthy();
+    expect(detectServiceManagerMock).toHaveBeenCalled();
   });
 });

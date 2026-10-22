@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Tests for the opt-in OpenTelemetry bootstrap. The @opentelemetry/* packages
@@ -17,6 +20,67 @@ const PROTOCOL_ENV = "OTEL_EXPORTER_OTLP_PROTOCOL";
 const originalEndpoint = process.env[ENDPOINT_ENV];
 const originalProtocol = process.env[PROTOCOL_ENV];
 
+// Node also resolves packages from node_modules folders above this checkout,
+// such as one in the user's home folder. Treat any OTel package that resolves
+// outside the checkout as absent, so these tests see the install that CI sees.
+const CHECKOUT_ROOT = realpathSync(fileURLToPath(new URL("../../../", import.meta.url)));
+const testRequire = createRequire(import.meta.url);
+const OTEL_PEERS = Object.keys(
+  (testRequire("../../package.json") as { peerDependencies?: Record<string, string> })
+    .peerDependencies ?? {},
+).filter((name) => name.startsWith("@opentelemetry/"));
+const FOREIGN_OTEL_PACKAGES = [
+  ...OTEL_PEERS,
+  "@opentelemetry/api",
+  "@opentelemetry/sdk-trace-base",
+].filter((name) => {
+  try {
+    const resolved = realpathSync(testRequire.resolve(name));
+    return path.relative(CHECKOUT_ROOT, resolved).startsWith("..");
+  } catch {
+    return false;
+  }
+});
+
+function foreignPackageError(name: string): Error {
+  return Object.assign(new Error(`Cannot find module '${name}' (outside the checkout)`), {
+    code: "MODULE_NOT_FOUND",
+  });
+}
+
+function hideForeignOtelPackages() {
+  if (FOREIGN_OTEL_PACKAGES.length === 0) return;
+  vi.doMock("node:module", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:module")>();
+    return {
+      ...actual,
+      createRequire: (...args: Parameters<typeof actual.createRequire>) => {
+        const real = actual.createRequire(...args);
+        const hidden = ((id: string) => {
+          if (FOREIGN_OTEL_PACKAGES.includes(id)) throw foreignPackageError(id);
+          return real(id);
+        }) as typeof real;
+        hidden.resolve = ((id: string, options?: unknown) => {
+          if (FOREIGN_OTEL_PACKAGES.includes(id)) throw foreignPackageError(id);
+          return real.resolve(id, options as never);
+        }) as typeof real.resolve;
+        return hidden;
+      },
+    };
+  });
+  for (const name of FOREIGN_OTEL_PACKAGES) {
+    vi.doMock(name, () => {
+      throw foreignPackageError(name);
+    });
+  }
+}
+
+function restoreForeignOtelPackages() {
+  if (FOREIGN_OTEL_PACKAGES.length === 0) return;
+  vi.doUnmock("node:module");
+  for (const name of FOREIGN_OTEL_PACKAGES) vi.doUnmock(name);
+}
+
 async function importFreshInstrumentation() {
   vi.resetModules();
   return await import("../instrumentation.js");
@@ -25,6 +89,7 @@ async function importFreshInstrumentation() {
 beforeEach(() => {
   delete process.env[ENDPOINT_ENV];
   delete process.env[PROTOCOL_ENV];
+  hideForeignOtelPackages();
 });
 
 afterEach(() => {
@@ -33,6 +98,7 @@ afterEach(() => {
   if (originalProtocol === undefined) delete process.env[PROTOCOL_ENV];
   else process.env[PROTOCOL_ENV] = originalProtocol;
   vi.restoreAllMocks();
+  restoreForeignOtelPackages();
 });
 
 describe("resolveProtocol", () => {
@@ -303,6 +369,12 @@ describe("shutdownInstrumentation", () => {
 // `recordProviderPluginSpan` is a no-op by contract, so a native-duration test
 // cannot run. Resolve the SDK first and skip the test when it is not installed.
 const otelSdk = (() => {
+  if (
+    FOREIGN_OTEL_PACKAGES.includes("@opentelemetry/api") ||
+    FOREIGN_OTEL_PACKAGES.includes("@opentelemetry/sdk-trace-base")
+  ) {
+    return null;
+  }
   try {
     const require = createRequire(import.meta.url);
     return {

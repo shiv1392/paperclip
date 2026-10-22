@@ -49,8 +49,14 @@ const mockTxInsertValues = vi.hoisted(() => vi.fn(async () => undefined));
 const mockTxInsert = vi.hoisted(() =>
   vi.fn(() => ({ values: mockTxInsertValues })),
 );
+// The review-transfer guard reads transfer rows inside the decision
+// transaction; these issues have none.
+const mockTxSelect = vi.hoisted(() =>
+  vi.fn(() => ({ from: () => ({ where: async () => [] }) })),
+);
 const mockTx = vi.hoisted(() => ({
   insert: mockTxInsert,
+  select: mockTxSelect,
 }));
 const mockDbSelectOrderBy = vi.hoisted(() => vi.fn(async () => []));
 const mockDbSelectWhere = vi.hoisted(() =>

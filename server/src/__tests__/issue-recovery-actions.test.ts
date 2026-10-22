@@ -14,18 +14,23 @@ import {
   authUsers,
   agentWakeupRequests,
   activityLog,
+  approvals,
   companies,
   createDb,
   environmentLeases,
   environments,
+  executionWorkspaces,
   heartbeatRuns,
   issueComments,
+  issueApprovals,
+  issueExecutionDecisions,
   issueInboxArchives,
   issueRecoveryActions,
   issueRelations,
   issueThreadInteractions,
   workspaceOperations,
   issues,
+  projects,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -162,8 +167,11 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(environments);
+    await db.delete(executionWorkspaces);
     await db.delete(issueInboxArchives);
     await db.delete(issues);
+    await db.delete(approvals);
+    await db.delete(projects);
     await db.delete(agentRuntimeState);
     await db.delete(agents);
     await db.delete(companies);
@@ -1847,6 +1855,235 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     expect(prompt).not.toContain("Recovery contract:");
     expect(prompt).not.toContain(action.nextAction);
     expect(prompt).not.toContain("Do not produce the deliverable");
+  });
+
+  async function seedBlockedPendingReview() {
+    const fixture = await seedCompany();
+    const { companyId, managerId: reviewerId, coderId, sourceIssueId } = fixture;
+    const stageId = randomUUID();
+    const runId = randomUUID();
+    const executionState = {
+      status: "pending",
+      monitor: null,
+      reviewRequest: null,
+      currentStageId: stageId,
+      lastDecisionId: null,
+      returnAssignee: { type: "agent", agentId: coderId, userId: null },
+      currentStageType: "review",
+      completedStageIds: [],
+      currentStageIndex: 0,
+      currentParticipant: { type: "agent", agentId: reviewerId, userId: null },
+      lastDecisionOutcome: null,
+      changesRequestedCount: 0,
+    };
+    const [workspace] = await db.insert(executionWorkspaces).values({ companyId, sourceIssueId,
+      mode: "isolated_workspace", strategyType: "git_worktree", name: "Review workspace" }).returning();
+    await db.update(issues).set({
+      status: "blocked",
+      assigneeAgentId: reviewerId,
+      executionWorkspaceId: workspace!.id,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "reuse_existing" },
+      executionPolicy: {
+        mode: "normal",
+        commentRequired: true,
+        stages: [{ id: stageId, type: "review", approvalsNeeded: 1,
+          participants: [{ id: randomUUID(), type: "agent", agentId: reviewerId, userId: null }] }],
+      },
+      executionState,
+    }).where(eq(issues.id, sourceIssueId));
+    // The reviewer's run was cancelled before it started: no provider actions.
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId, agentId: reviewerId, invocationSource: "assignment", status: "cancelled",
+      startedAt: null, finishedAt: new Date(), contextSnapshot: { issueId: sourceIssueId },
+    });
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId, sourceIssueId, kind: "active_run_watchdog", status: "resolved", outcome: "blocked",
+      ownerType: "board", returnOwnerAgentId: reviewerId, cause: "legacy_execution_requires_reconciliation",
+      fingerprint: runId, nextAction: "Preserve recorded work without replay.",
+      evidence: { runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } },
+    }).returning();
+    const [issue] = await db.select().from(issues).where(eq(issues.id, sourceIssueId));
+    const body = {
+      actionId: action!.id, outcome: "restored", sourceIssueStatus: "in_review",
+      executionReconciliation: { runId, providerStopped: true, actionOutcome: "not_performed",
+        outcomeEvidence: "Run lifecycle shows cancellation before start; no provider actions were recorded." },
+    };
+    return { ...fixture, reviewerId, stageId, runId, action: action!, issue: issue!, executionState, body };
+  }
+
+  it.each([
+    ["resolved with blocked replay", { status: "resolved", outcome: "blocked", replay: true }],
+    ["still active without a replay marker", { status: "active", outcome: null, replay: false }],
+  ])("lists the recovery action that the execution blocker cites when it is %s", async (_label, shape) => {
+    const f = await seedBlockedPendingReview();
+    await db.update(issueRecoveryActions).set({
+      status: shape.status, outcome: shape.outcome,
+      evidence: shape.replay
+        ? { runId: f.runId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } }
+        : { runId: f.runId },
+    }).where(eq(issueRecoveryActions.id, f.action.id));
+    const app = createApp();
+    const issue = await request(app).get(`/api/issues/${f.sourceIssueId}`).expect(200);
+    expect(issue.body.executionBlocker).toMatchObject({ recoveryActionId: f.action.id });
+    const listed = await request(app).get(`/api/issues/${f.sourceIssueId}/recovery-actions`).expect(200);
+    expect(listed.body.actions.map((action: { id: string }) => action.id)).toContain(f.action.id);
+    // The assigned reviewer agent reads the same projection.
+    const agentApp = createApp({ type: "agent", agentId: f.reviewerId, companyId: f.companyId, runId: randomUUID(), source: "agent_jwt" });
+    const agentListed = await request(agentApp).get(`/api/issues/${f.sourceIssueId}/recovery-actions`).expect(200);
+    expect(agentListed.body.actions.map((action: { id: string }) => action.id)).toContain(f.action.id);
+    // A resolved no-replay hold still blocks execution but is not the active action.
+    expect(agentListed.body.active?.id ?? null).toBe(shape.status === "active" ? f.action.id : null);
+  });
+
+  it("resumes the same pending reviewer after a reconciled never-started run without deciding the stage", async () => {
+    const f = await seedBlockedPendingReview();
+    const app = createApp();
+    const [resolved, concurrent] = await Promise.all([1, 2].map(() =>
+      request(app).post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`).send(f.body)));
+    expect([resolved.status, concurrent.status]).toEqual([200, 200]);
+    if (resolved.body.issue.status !== "in_review") throw new Error("primary resolve did not resume review");
+    expect(f.issue.executionWorkspaceId).toEqual(expect.any(String));
+    expect(resolved.body.issue).toMatchObject({
+      status: "in_review", assigneeAgentId: f.reviewerId, executionState: f.executionState,
+      executionWorkspaceId: f.issue.executionWorkspaceId,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "reuse_existing" },
+    });
+    expect(resolved.body.recoveryAction).toMatchObject({ id: f.action.id, status: "resolved", outcome: "handed_back" });
+    expect(await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.sourceIssueId)))
+      .toHaveLength(0);
+    const [recorded] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, f.action.id));
+    expect(recorded!.evidence).toMatchObject({ executionReconciliation: { runId: f.runId }, continuationDelivery: "pending" });
+    expect(recorded!.evidence).not.toHaveProperty("automaticRecovery");
+
+    // Replay records nothing new.
+    await request(app).post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`).send(f.body).expect(200);
+    expect((await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, f.action.id)))[0])
+      .toEqual(recorded);
+
+    const responsibleUserId = randomUUID();
+    await db.insert(authUsers).values({ id: responsibleUserId, name: "Recovery operator",
+      email: `${responsibleUserId}@example.test`, emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+    await db.update(companies).set({ defaultResponsibleUserId: responsibleUserId }).where(eq(companies.id, f.companyId));
+    // Occupy the reviewer's only slot so admission is real but no provider launches.
+    await db.update(agents).set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1 } } })
+      .where(eq(agents.id, f.reviewerId));
+    await seedHeartbeatRun({ companyId: f.companyId, agentId: f.reviewerId, runId: randomUUID(), status: "running" });
+    const heartbeat = heartbeatService(db, { runtimeEnv: {} });
+    await Promise.all([deliverReconciledExecutions(db, heartbeat.wakeup), deliverReconciledExecutions(db, heartbeat.wakeup)]);
+    const wakes = await db.select().from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.idempotencyKey, `execution-reconciliation:${f.action.id}`));
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({ agentId: f.reviewerId, payload: expect.objectContaining({ issueId: f.sourceIssueId }) });
+    const [delivered] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, f.action.id));
+    expect(delivered!.evidence).toMatchObject({ continuationDelivery: "delivered", continuationRunId: wakes[0]!.runId });
+    const [after] = await db.select().from(issues).where(eq(issues.id, f.sourceIssueId));
+    expect(after).toMatchObject({ status: "in_review", assigneeAgentId: f.reviewerId, executionState: f.executionState });
+  });
+
+  it.each([
+    ["reviewer agent actor", 403, { error: "Board access required" }],
+    ["stale run evidence", 409, { error: expect.stringContaining("Reconcile the recorded execution") }],
+    ["started run", 409, { details: { code: "review_resume_run_started" } }],
+    ["mixed action outcome", 409, { details: { code: "review_resume_run_started" } }],
+    ["unreleased run lease", 409, { error: expect.stringContaining("has not finished releasing its authority") }],
+    ["conflicting execution run", 409, { details: { code: "recovery_source_run_lock" } }],
+    ["pending approval", 409, { details: { code: "recovery_governed_approval_pending" } }],
+    ["budget-paused project", 409, { error: "Project is paused because its budget hard-stop was reached" }],
+    ["paused reviewer", 409, { details: { code: "disposition_recovery_owner_unavailable" } }],
+    ["approval stage", 409, { details: { code: "review_resume_not_eligible" } }],
+    ["participant changed", 409, { details: { code: "review_resume_not_eligible" } }],
+    ["unresolved blocker", 409, { details: { code: "disposition_recovery_retry_blocked" } }],
+    ["action of another issue", 404, { error: "Active recovery action not found" }],
+  ] as const)("keeps the pending review blocked when %s", async (gate, status, expected) => {
+    const f = await seedBlockedPendingReview();
+    let actor: any = undefined;
+    let body: Record<string, unknown> = f.body;
+    if (gate === "reviewer agent actor") {
+      const actorRunId = randomUUID();
+      await seedHeartbeatRun({ companyId: f.companyId, agentId: f.reviewerId, runId: actorRunId, issueId: f.sourceIssueId });
+      actor = { type: "agent", agentId: f.reviewerId, companyId: f.companyId, runId: actorRunId, source: "agent_jwt" };
+    }
+    if (gate === "stale run evidence") {
+      body = { ...f.body, executionReconciliation: { ...f.body.executionReconciliation, runId: randomUUID() } };
+    }
+    if (gate === "started run") {
+      await db.update(heartbeatRuns).set({ startedAt: new Date() }).where(eq(heartbeatRuns.id, f.runId));
+    }
+    if (gate === "mixed action outcome") {
+      body = { ...f.body, executionReconciliation: { ...f.body.executionReconciliation, actionOutcome: "mixed" } };
+    }
+    if (gate === "conflicting execution run") {
+      const liveRunId = randomUUID();
+      await seedHeartbeatRun({ companyId: f.companyId, agentId: f.coderId, runId: liveRunId, issueId: f.sourceIssueId });
+      await db.update(issues).set({ executionRunId: liveRunId }).where(eq(issues.id, f.sourceIssueId));
+    }
+    if (gate === "paused reviewer") {
+      await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.reviewerId));
+    }
+    if (gate === "action of another issue") {
+      const otherIssueId = randomUUID();
+      await db.insert(issues).values({ id: otherIssueId, companyId: f.companyId, title: "Other", status: "blocked",
+        priority: "medium", issueNumber: 3, identifier: `${f.prefix}-3` });
+      const [other] = await db.insert(issueRecoveryActions).values({ ...f.action, id: randomUUID(),
+        sourceIssueId: otherIssueId, fingerprint: randomUUID() }).returning();
+      body = { ...f.body, actionId: other!.id };
+    }
+    if (gate === "unreleased run lease") {
+      await db.insert(environmentLeases).values({ companyId: f.companyId, issueId: f.sourceIssueId,
+        heartbeatRunId: f.runId, status: "active", provider: "local" });
+    }
+    if (gate === "pending approval") {
+      const [approval] = await db.insert(approvals).values({ companyId: f.companyId, type: "approve_ceo_strategy",
+        status: "pending", payload: {} }).returning();
+      await db.insert(issueApprovals).values({ companyId: f.companyId, issueId: f.sourceIssueId, approvalId: approval!.id });
+    }
+    if (gate === "budget-paused project") {
+      const [project] = await db.insert(projects).values({ companyId: f.companyId, name: "Paused",
+        pausedAt: new Date(), pauseReason: "budget" }).returning();
+      await db.update(issues).set({ projectId: project!.id }).where(eq(issues.id, f.sourceIssueId));
+    }
+    if (gate === "approval stage") {
+      const policy = f.issue.executionPolicy as { stages: Array<Record<string, unknown>> };
+      await db.update(issues).set({
+        executionPolicy: { ...policy, stages: [{ ...policy.stages[0], type: "approval" }] },
+        executionState: { ...f.executionState, currentStageType: "approval" },
+      }).where(eq(issues.id, f.sourceIssueId));
+    }
+    if (gate === "participant changed") {
+      await db.update(issues).set({
+        executionState: { ...f.executionState, currentParticipant: { type: "agent", agentId: f.coderId, userId: null } },
+      }).where(eq(issues.id, f.sourceIssueId));
+    }
+    if (gate === "unresolved blocker") {
+      const blockerId = randomUUID();
+      await db.insert(issues).values({ id: blockerId, companyId: f.companyId, title: "Blocker", status: "todo",
+        priority: "medium", issueNumber: 2, identifier: `${f.prefix}-2` });
+      await db.insert(issueRelations).values({ companyId: f.companyId, issueId: blockerId,
+        relatedIssueId: f.sourceIssueId, type: "blocks" });
+    }
+    const [issueBefore] = await db.select().from(issues).where(eq(issues.id, f.sourceIssueId));
+    const response = await request(createApp(actor))
+      .post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`).send(body);
+    expect(response.status).toBe(status);
+    expect(response.body).toMatchObject(expected);
+    expect((await db.select().from(issues).where(eq(issues.id, f.sourceIssueId)))[0]).toEqual(issueBefore);
+    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, f.action.id));
+    expect(action).toMatchObject({ status: "resolved", outcome: "blocked", evidence: f.action.evidence });
+    expect(await db.select().from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.idempotencyKey, `execution-reconciliation:${f.action.id}`))).toHaveLength(0);
+    expect(await db.select().from(issueExecutionDecisions).where(eq(issueExecutionDecisions.issueId, f.sourceIssueId)))
+      .toHaveLength(0);
+  });
+
+  it("keeps rejecting a todo hand-back that would bypass the pending review", async () => {
+    const f = await seedBlockedPendingReview();
+    const response = await request(createApp()).post(`/api/issues/${f.sourceIssueId}/recovery-actions/resolve`)
+      .send({ ...f.body, sourceIssueStatus: "todo" }).expect(409);
+    expect(response.body.details).toMatchObject({ code: "recovery_governed_stage_pending" });
+    expect((await db.select().from(issues).where(eq(issues.id, f.sourceIssueId)))[0])
+      .toMatchObject({ status: "blocked", executionState: f.executionState });
   });
 
   it("accepts new verified evidence after an automatic no-replay disposition without reopening on duplicate requests", async () => {
