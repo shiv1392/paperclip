@@ -461,12 +461,17 @@ beforeAll(async () => {
   hermeticGitConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-runtime-gitconfig-"));
   const toolBin = path.join(hermeticGitConfigDir, "bin");
   await fs.mkdir(toolBin);
-  const pnpmPath = (process.env.PATH ?? "").split(path.delimiter)
-    .map((directory) => path.join(directory, "pnpm")).find(existsSync);
-  if (!pnpmPath) throw new Error("Workspace provisioning tests require pnpm");
   await fs.symlink(process.execPath, path.join(toolBin, "node"));
-  const quotedPnpmPath = (await fs.realpath(pnpmPath)).replaceAll("'", "'\\''");
-  await fs.writeFile(path.join(toolBin, "pnpm"), `#!/bin/sh\nexec '${quotedPnpmPath}' "$@"\n`, { mode: 0o755 });
+  const searchPath = (process.env.PATH ?? "").split(path.delimiter);
+  for (const command of ["pnpm", "corepack"]) {
+    const commandPath = searchPath.map((directory) => path.join(directory, command)).find(existsSync);
+    if (!commandPath) {
+      if (command === "pnpm") throw new Error("Workspace provisioning tests require pnpm");
+      continue;
+    }
+    const quotedCommandPath = (await fs.realpath(commandPath)).replaceAll("'", "'\\''");
+    await fs.writeFile(path.join(toolBin, command), `#!/bin/sh\nexec '${quotedCommandPath}' "$@"\n`, { mode: 0o755 });
+  }
   // Exercise the script's fallback writer, not a paperclipai installed on the host.
   // Individual CLI fixtures prepend their own fake commands when needed.
   hermeticToolPath = [toolBin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter);
@@ -509,12 +514,14 @@ afterEach(async () => {
       leasedRunIds.delete(runId);
     }),
   );
+  // Assertions may keep manual services alive; suite teardown must stop them.
+  // Keep the test's home and exposure fake active while releasing its services.
+  await resetRuntimeServicesForTests({ terminateProcesses: true });
   delete process.env.PAPERCLIP_CONFIG;
   delete process.env.PAPERCLIP_HOME;
   delete process.env.PAPERCLIP_INSTANCE_ID;
   delete process.env.PAPERCLIP_WORKTREES_DIR;
   delete process.env.DATABASE_URL;
-  await resetRuntimeServicesForTests();
   // Registry reset does not clear the process-local allocation claims. A
   // failed-start fixture must not reserve another test's ephemeral port.
   resetRuntimeServicePortReservationsForTests();
