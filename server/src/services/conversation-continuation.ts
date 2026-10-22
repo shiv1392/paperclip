@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
@@ -101,6 +102,32 @@ function processMayBeAlive(pid: number): boolean {
   }
 }
 
+/** Only a stable, unrelated singleton leader can retire a historical group.
+ * Other members may still belong to the old execution. Snapshot failures hold.
+ * This bounded asynchronous ps runs only after a verified PID birth mismatch.
+ */
+async function isReusedSingletonGroupLeader(pid: number, groupId: number, observedStart: string): Promise<boolean> {
+  if (pid !== groupId || process.platform === "win32") return false;
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile("ps", ["-A", "-o", "pid=", "-o", "pgid="],
+        { encoding: "utf8", timeout: 1_500, maxBuffer: 4 * 1024 * 1024 },
+        (error, output) => error ? reject(error) : resolve(output));
+    });
+    const members: number[] = [];
+    for (const line of stdout.trim().split("\n")) {
+      const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+      if (!match) return false;
+      if (Number(match[2]) === groupId) members.push(Number(match[1]));
+    }
+    if (members.length !== 1 || members[0] !== pid) return false;
+    const after = await readProcessStartedAt(pid);
+    return after !== null && new Date(after).getTime() === new Date(observedStart).getTime();
+  } catch {
+    return false;
+  }
+}
+
 /** A terminal conversation row does not prove that its execution authority ended.
  * Other adapters keep their existing bootstrap and ownership protocols.
  */
@@ -144,13 +171,21 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
       if (leases.every(lease => lease.provider !== "local")) continue;
     }
     let pidAlive = run.processPid !== null && processMayBeAlive(run.processPid);
+    let reusedStart: string | null = null;
     if (pidAlive && run.processStartedAt) {
       // A recycled PID cannot keep an old task blocked. An unreadable identity
       // stays conservative; the original process may still own execution.
       const observed = await readProcessStartedAt(run.processPid!).catch(() => null);
-      if (observed && new Date(observed).getTime() !== run.processStartedAt.getTime()) pidAlive = false;
+      if (observed && Number.isFinite(new Date(observed).getTime())
+        && new Date(observed).getTime() !== run.processStartedAt.getTime()) {
+        pidAlive = false;
+        reusedStart = observed;
+      }
     }
-    const groupAlive = run.processGroupId !== null && processMayBeAlive(-run.processGroupId);
+    let groupAlive = run.processGroupId !== null && processMayBeAlive(-run.processGroupId);
+    if (groupAlive && reusedStart && await isReusedSingletonGroupLeader(run.processPid!, run.processGroupId!, reusedStart)) {
+      groupAlive = false;
+    }
     if (pidAlive || groupAlive || leaseHeld) {
       return {
         runId: run.id,
