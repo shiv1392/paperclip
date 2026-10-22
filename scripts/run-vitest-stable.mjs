@@ -463,7 +463,11 @@ async function runProjectGroup(projects, groupName, shardIndex = null, shardCoun
     shardCount !== null && shardCount > 1 ? [`--shard=${shardIndex + 1}/${shardCount}`] : [];
   const shardSuffix = shardArgs.length > 0 ? ` shard ${shardIndex + 1}/${shardCount}` : "";
   for (const project of projects) {
-    await runVitest(["--project", project, ...shardArgs], `${groupName} project ${project}${shardSuffix}`);
+    // These projects start many real child processes or load the full UI graph.
+    // Bound file concurrency so host CPU count does not consume test deadlines.
+    const workerArgs = ["@paperclipai/ui", "@paperclipai/adapter-utils"].includes(project)
+      ? ["--maxWorkers=2"] : [];
+    await runVitest(["--project", project, ...workerArgs, ...shardArgs], `${groupName} project ${project}${shardSuffix}`);
   }
 }
 
