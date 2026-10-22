@@ -454,9 +454,22 @@ const hermeticEnvKeys = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMIN
 const previousHermeticEnv = new Map<string, string | undefined>();
 let hermeticGitConfigDir: string | null = null;
 let previousShellForTest: string | undefined;
+let previousPathForTest: string | undefined;
+let hermeticToolPath: string;
 
 beforeAll(async () => {
   hermeticGitConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-runtime-gitconfig-"));
+  const toolBin = path.join(hermeticGitConfigDir, "bin");
+  await fs.mkdir(toolBin);
+  const pnpmPath = (process.env.PATH ?? "").split(path.delimiter)
+    .map((directory) => path.join(directory, "pnpm")).find(existsSync);
+  if (!pnpmPath) throw new Error("Workspace provisioning tests require pnpm");
+  await fs.symlink(process.execPath, path.join(toolBin, "node"));
+  const quotedPnpmPath = (await fs.realpath(pnpmPath)).replaceAll("'", "'\\''");
+  await fs.writeFile(path.join(toolBin, "pnpm"), `#!/bin/sh\nexec '${quotedPnpmPath}' "$@"\n`, { mode: 0o755 });
+  // Exercise the script's fallback writer, not a paperclipai installed on the host.
+  // Individual CLI fixtures prepend their own fake commands when needed.
+  hermeticToolPath = [toolBin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter);
   const globalConfigPath = path.join(hermeticGitConfigDir, "gitconfig");
   await fs.writeFile(
     globalConfigPath,
@@ -479,11 +492,15 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  previousPathForTest = process.env.PATH;
+  process.env.PATH = hermeticToolPath;
   previousShellForTest = process.env.SHELL;
   process.env.SHELL = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
 });
 
 afterEach(async () => {
+  if (previousPathForTest === undefined) delete process.env.PATH;
+  else process.env.PATH = previousPathForTest;
   if (previousShellForTest === undefined) delete process.env.SHELL;
   else process.env.SHELL = previousShellForTest;
   await Promise.all(
