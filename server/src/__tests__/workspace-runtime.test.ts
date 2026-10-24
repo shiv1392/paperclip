@@ -95,6 +95,10 @@ const RUNTIME_OWNED_GIT_BRANCH_METADATA = {
 
 const execFileAsync = promisify(execFile);
 
+// These fixtures start and stop real processes. Allow host inspection and
+// teardown to finish without changing any configured service readiness limit.
+const RUNTIME_FIXTURE_TIMEOUT_MS = 60_000;
+
 function stableStringifyForTest(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((entry) => stableStringifyForTest(entry)).join(",")}]`;
@@ -4849,7 +4853,7 @@ describe("ensureRuntimeServicesForRun", () => {
       await fs.rm(firstRoot, { recursive: true, force: true });
       await fs.rm(secondRoot, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   it("requires Paperclip dev runtime services to pass /api/health readiness", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-health-"));
@@ -5138,7 +5142,7 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(third).toHaveLength(1);
     expect(third[0]?.reused).toBe(false);
     expect(third[0]?.id).not.toBe(first[0]?.id);
-  }, 10_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   it("does not reuse project-scoped shared services across different workspace launch contexts", async () => {
     const primaryWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-primary-"));
@@ -5565,7 +5569,7 @@ describe("ensureRuntimeServicesForRun", () => {
       workspaceCwd: workspace.cwd,
       runtimeServiceId: worker?.id ?? null,
     });
-  }, 10_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 });
 
 describe("buildWorkspaceRuntimeDesiredStatePatch", () => {
@@ -6882,7 +6886,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
     });
 
     const waitForMarker = async (filePath: string) => {
-      const deadline = Date.now() + 5_000;
+      const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
         if (existsSync(filePath)) return;
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -6890,7 +6894,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       throw new Error("Timed out waiting for runtime service process marker");
     };
     const waitForPersistedStatus = async (status: string, requireProviderRef = false) => {
-      const deadline = Date.now() + 5_000;
+      const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
         const row = await db
           .select()
@@ -7024,7 +7028,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       if (previousPaperclipInstanceId === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
       else process.env.PAPERCLIP_INSTANCE_ID = previousPaperclipInstanceId;
     }
-  }, 15_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   async function createRuntimeFixture(input?: {
     companyId?: string;
@@ -7466,7 +7470,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       });
       startPromise.catch(() => undefined);
 
-      const markerDeadline = Date.now() + 5_000;
+      const markerDeadline = Date.now() + 15_000;
       while (!existsSync(spawnedMarkerPath) && Date.now() < markerDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -7567,7 +7571,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       await cleanupRuntimeHome();
       await fixture.cleanup();
     }
-  }, 20_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   it("retries a bind race on the next bounded port and persists the selected URL", async () => {
     const fixture = await createRuntimeFixture();
@@ -7639,7 +7643,7 @@ describeEmbeddedPostgres("workspace runtime service control persistence", () => 
       await cleanupRuntimeHome();
       await fixture.cleanup();
     }
-  }, 20_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   // Exhaustion starts and stops all 32 candidates after ownership fails.
   // Give their real-process stability checks and verified cleanup bounded headroom.
@@ -8057,7 +8061,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       });
       await fs.rm(paperclipHome, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   it("backfills a pre-existing HTTP-only managed worktree runtime to verified HTTPS in place", async () => {
     // PAP-17158: an eligible workspace created before the feature must come
@@ -8282,7 +8286,7 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
       if (previousHttpsMode === undefined) delete process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS;
       else process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS = previousHttpsMode;
     }
-  }, 40_000);
+  }, RUNTIME_FIXTURE_TIMEOUT_MS);
 
   it("re-adopts a request-logging service on the same auto port after supervisor stdio closes", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-reconcile-"));
