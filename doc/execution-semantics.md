@@ -1468,6 +1468,33 @@ inspect the matching decision under Recovery details, even when there is no
 active recovery action. Existing run inspection, verified continuation, new
 messages, and required-file repair remain the supported recovery paths.
 
+Board users can record an observed outcome for an exact settled historical legacy
+execution through `POST /api/issues/:id/recovery-actions/:actionId/record-execution-outcome`.
+The strict request contains `runId`, `providerStopped: true`, `actionOutcome`
+(`completed`, `not_performed`, or `mixed`), and substantial `outcomeEvidence`.
+This API supports only a started, terminal legacy conversation run with immutable
+adapter evidence and a settled `legacy_execution_requires_reconciliation` action
+whose `preserve_without_replay_v1` receipt still holds that exact run.
+Workspace recovery uses its existing flow. Missing process identity, live or
+unverified process ownership, unfinished coordinator cleanup, and unsafe or
+unreleased leases retain the hold. A recycled PID is safe only under the shared
+conservative process-ownership rules; a live group with additional or unknown
+members stays held.
+
+The transaction locks the issue, coordinator, run, action, and existing leases,
+then rechecks the source and shared ownership/cleanup proofs. It saves a versioned
+`recordOnlyExecutionOutcome` receipt, preserves the prior automatic hold inside
+the receipt, and marks only that action's replay hold as reconciled. Identical
+requests return the first receipt; a different decision or evidence returns 409.
+The recovery-actions GET retains the receipt, and issue activity records
+`issue.execution_outcome_recorded` once.
+
+Recording this outcome does not authorize continuation. It does not change issue
+status, owner, version, execution policy, pending reviews, cancellation history,
+agent pause, or leases. It creates no run, wake, retry, or continuation delivery.
+A distinct reviewer recovery remains subject to its own supported resolution and
+all normal admission gates. This is an API capability; no new UI action is provided.
+
 The board owns the recovery decision, not the source deliverable. Automatic recovery must preserve both source assignee fields. Only an explicit operator decision or applicable serious-failure policy may transfer the deliverable.
 
 An upgrade may encounter an already-active agent-owned recovery action. Paperclip keeps that record readable and resolvable for compatibility, but periodic reconciliation does not enqueue another takeover wake from it.

@@ -139,3 +139,9 @@ own policy and access review.
 
 Gaps: Even reads/state/preview require board. There is no agent tree-control path just
 from company/task permissions.
+
+Historical execution outcome recording is separate from review signoff. The
+board-only [record-only recovery API](recovery.md#unknown-outcome) records the
+former execution's observed outcome without deciding the pending review,
+changing task ownership, or waking the former author. The reviewer's own recovery
+and all review gates remain in force.

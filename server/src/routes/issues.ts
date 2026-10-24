@@ -1,3 +1,4 @@
+import { recordExecutionOutcome } from "../services/record-execution-outcome.js";
 import { parseObject } from "../adapters/utils.js";
 import { prepareRestrictedWorkspaceRetry } from "../services/restricted-workspace-retry.js";
 import { issueSummariesQuerySchema, type IssueSummary } from "@paperclipai/shared";
@@ -99,6 +100,7 @@ import {
   resolveIssueRecoveryActionSchema,
   retryWorkspaceExportSchema,
   recoverWorkspaceSchema,
+  recordExecutionOutcomeSchema,
   resumeWorkspaceFinalizationSchema,
   runnerGoalActionRequestSchema,
   feedbackTargetTypeSchema,
@@ -9567,7 +9569,7 @@ export function issueRoutes(
     });
     const retainedHolds = await db.select().from(issueRecoveryActions).where(and(
       eq(issueRecoveryActions.companyId, issue.companyId), eq(issueRecoveryActions.sourceIssueId, issue.id),
-      or(unreconciledNativeExportPredicate(), and(
+      or(sql`${issueRecoveryActions.evidence}->'recordOnlyExecutionOutcome'->>'schema' = 'paperclip.record-execution-outcome.v1'`, unreconciledNativeExportPredicate(), and(
         sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`, or(
         sql`${issueRecoveryActions.evidence}->'workspaceRestoreRecovery'->>'schema' = ${LEGACY_WORKSPACE_RECOVERY_SCHEMA}`,
         inArray(issueRecoveryActions.cause, [...EXECUTION_RECONCILIATION_CAUSES]),
@@ -9578,6 +9580,16 @@ export function issueRoutes(
       actions: [...(active ? [active] : []), ...retainedHolds
         .filter(action => action.id !== active?.id).map(issueRecoveryActionReadModel)],
     });
+  });
+
+  router.post("/issues/:id/recovery-actions/:actionId/record-execution-outcome", validate(recordExecutionOutcomeSchema), async (req, res) => {
+    assertBoard(req);
+    const issue = await getAccessibleResource(req, res, svc.getById(req.params.id as string), "Issue not found");
+    if (!issue || !(await assertIssueReadAllowed(req, res, issue))) return;
+    const decision = await decideIssueAccess(req, issue, "issue:mutate");
+    if (!decision.allowed) throw forbidden(decision.explanation, authorizationDeniedDetails(decision));
+    res.json(await recordExecutionOutcome({ db, companyId: issue.companyId, issueId: issue.id,
+      actionId: req.params.actionId as string, actorId: getActorInfo(req).actorId, decision: req.body }));
   });
 
   router.post("/issues/:id/recovery-actions/recover-workspace", validate(recoverWorkspaceSchema), async (req, res) => {
@@ -9762,6 +9774,10 @@ export function issueRoutes(
               ),
             );
           if (settled) {
+            if (settled.evidence.recordOnlyExecutionOutcome) {
+              throw conflict("This historical execution has a record-only outcome. Resolve the current recovery action to request continuation.",
+                { code: "record_only_execution_outcome" });
+            }
             await requireRecoveryActionAuthority(
               req,
               lockedIssue,

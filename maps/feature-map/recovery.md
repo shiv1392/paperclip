@@ -33,7 +33,11 @@ Agent access: [companion](../agent-access-map/recovery.md).
   filesystem regressions cover native and legacy recovery and one-time delivery;
   hosted provider recovery remains separate acceptance.
 - `unknown-outcome`: `recovery/unknown-outcome` — uncertain external side effects require inspection and
-  an explicit decision, not automatic replay.
+  an explicit decision, not automatic replay. Board users can record an exact
+  settled historical legacy execution outcome through the supported record-only
+  API. The receipt clears only the verified old hold and leaves pending review,
+  current ownership, pause, cancellation, and newer recovery unchanged. This has
+  no new UI action; continuation requires its separate supported flow.
 - `user-continuation`: `recovery/user-continuation` — saved user messages after a stop are reconsidered once
   cleanup proves the old execution is stopped; duplicate wakes are avoided.
 - `reconnect`: `recovery/reconnect` — browser stream recovery refreshes persisted state without claiming

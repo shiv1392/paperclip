@@ -283,9 +283,17 @@ Review: `baseline`.
 API: `present` — representative operation IDs:
 
 - `POST /api/chat-endpoints/{endpointId}/publications/{publicationId}/resolve`.
+- `POST /api/issues/{id}/recovery-actions/{actionId}/record-execution-outcome`.
+- `GET /api/issues/{id}/recovery-actions` (immutable record-only receipt readback).
 
 Agent access: `restricted` — Board provider-outcome resolution; agent may inspect
-assigned provider tools.
+assigned provider tools. Record-only execution outcome writes are `operator-only`;
+agent actors, including the former author and current reviewer, are denied.
+Company and task read/mutate checks apply. The exact settled source run, process
+ownership, coordinator cleanup, and lease proofs are rechecked under transaction
+locks. This action grants no execution authority and sends no wake. See the
+[HTTP/PostgreSQL regressions](../../server/src/__tests__/record-execution-outcome.test.ts).
+These local board tests do not establish a live agent journey.
 
 Policy: Task/run visibility, run ownership and source/action policy; workspace export
 retry and some operator controls require board.

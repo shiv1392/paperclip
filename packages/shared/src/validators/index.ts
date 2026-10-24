@@ -446,6 +446,8 @@ export {
   issueExecutionStateSchema,
   issueRecoveryActionReadModelSchema,
   resolveIssueRecoveryActionSchema,
+  recordExecutionOutcomeSchema,
+  type RecordExecutionOutcome,
   isValidExistingBranchName,
   retryWorkspaceExportSchema,
   recoverWorkspaceSchema,

@@ -96,3 +96,20 @@ export interface ExecutionReconciliation {
     interveningExecutions?: Array<{ runId: string; recoveryActionId: string; evidenceSha256: string }>;
   };
 }
+
+/** Immutable observed outcome; grants no permission to continue or replay. */
+export interface ExecutionOutcomeReceipt {
+  schema: "paperclip.record-execution-outcome.v1";
+  id: string;
+  companyId: string;
+  issueId: string;
+  actionId: string;
+  runId: string;
+  providerStopped: true;
+  actionOutcome: "completed" | "not_performed" | "mixed";
+  outcomeEvidence: string;
+  actorId: string;
+  recordedAt: string;
+  continuation: "not_requested";
+  sourceRecovery: { status: string; outcome: string | null; automaticRecovery: Record<string, unknown> };
+}

@@ -426,6 +426,17 @@ describe("openapi routes", () => {
     expect(test.responses["200"].content["application/json"].schema.properties.source).toMatchObject({ enum: ["control_plane"] });
   });
 
+  it("documents record-only execution outcomes as a strict board-only operation", () => {
+    const { spec } = loadSpecRoutes();
+    const operation = spec.paths["/api/issues/{id}/recovery-actions/{actionId}/record-execution-outcome"].post;
+    expect(operation.security).toEqual([{ BoardSessionAuth: [] }, { BoardApiKeyAuth: [] }]);
+    expect(operation["x-paperclip-authorization"]).toEqual({ actor: "board" });
+    const schema = operation.requestBody.content["application/json"].schema;
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["runId", "providerStopped", "actionOutcome", "outcomeEvidence"]);
+    expect(schema.properties.sourceIssueStatus).toBeUndefined();
+  });
+
   it("documents review transfer writes as board only and issue deletion conflicts", () => {
     const { spec } = loadSpecRoutes();
     for (const operation of [

@@ -251,6 +251,7 @@ import {
   requestIssueReviewTransferSchema,
   attachIssueReviewTransferReceiptsSchema,
   recoverWorkspaceSchema,
+  recordExecutionOutcomeSchema,
   retryWorkspaceExportSchema,
   reconstructWorkspaceSchema,
   resumeWorkspaceFinalizationSchema,
@@ -1389,6 +1390,7 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
+  "POST /api/issues/{id}/recovery-actions/{actionId}/record-execution-outcome",
   "GET /api/companies/{companyId}/prompt-injection-prevention",
   "PUT /api/companies/{companyId}/prompt-injection-prevention",
   "GET /api/companies/{companyId}/prompt-injection-prevention/models",
@@ -10740,6 +10742,15 @@ registerCurrentRoute({
   summary: "Continue from saved task attachments after confirmed destruction of the original workspace",
   body: reconstructWorkspaceSchema,
   responses: { 202: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict },
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/issues/{id}/recovery-actions/{actionId}/record-execution-outcome",
+  tags: ["issues"],
+  summary: "Record a stopped historical legacy execution outcome without continuation (board only)",
+  body: recordExecutionOutcomeSchema,
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict },
 });
 
 registerCurrentRoute({

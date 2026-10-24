@@ -183,6 +183,9 @@ export async function markExecutionReconciliation(
   deliveryOwner?: { kind: "chat_failed_run_retry"; actionId: string },
   options?: { workspaceRepairOnly?: boolean },
 ) {
+  if (action.evidence.recordOnlyExecutionOutcome) {
+    throw conflict("A record-only execution outcome cannot authorize continuation.");
+  }
   if (options?.workspaceRepairOnly && (deliveryOwner || !hasRequiredWorkspaceRecovery(action.evidence))) {
     throw conflict("Workspace repair must target the retained source without a continuation owner.");
   }
@@ -253,6 +256,7 @@ export async function deliverReconciledExecutions(
       and(
         eq(issueRecoveryActions.status, "resolved"),
         sql`${issueRecoveryActions.evidence}->>'continuationDelivery' = 'pending'`,
+        sql`${issueRecoveryActions.evidence}->'recordOnlyExecutionOutcome' is null`,
       ),
     )
     .limit(25);
@@ -266,6 +270,7 @@ export async function deliverReconciledExecutions(
         eq(issueRecoveryActions.id, action.id),
         eq(issueRecoveryActions.status, "resolved"),
         sql`${issueRecoveryActions.evidence}->>'continuationDelivery' = 'pending'`,
+        sql`${issueRecoveryActions.evidence}->'recordOnlyExecutionOutcome' is null`,
         sql`${issueRecoveryActions.evidence}->'executionReconciliation' = ${JSON.stringify(decision)}::jsonb`,
       );
       const [task] = await db

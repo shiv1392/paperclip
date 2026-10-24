@@ -657,6 +657,16 @@ export const reconstructWorkspaceSchema = z.object({
   acknowledgeLostWork: z.literal(true),
 }).strict();
 
+/** Record-only evidence cannot request a continuation or workspace repair. */
+export const recordExecutionOutcomeSchema = z.object({
+  runId: z.string().guid(),
+  providerStopped: z.literal(true),
+  actionOutcome: z.enum(["completed", "not_performed", "mixed"]),
+  outcomeEvidence: z.string().trim().min(20).max(12000),
+}).strict();
+
+export type RecordExecutionOutcome = z.infer<typeof recordExecutionOutcomeSchema>;
+
 export const resolveIssueRecoveryActionSchema = z
   .object({
     workspaceBaseRef: z.object({

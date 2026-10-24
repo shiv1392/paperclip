@@ -1,7 +1,7 @@
 import type { SetIssueTitle } from "@paperclipai/shared";
 import { ISSUE_SUMMARIES_MAX_IDS } from "@paperclipai/shared";
 import type { IssueSummary } from "@paperclipai/shared";
-import type { ExecutionReconciliation } from "@paperclipai/shared";
+import type { ExecutionReconciliation, ExecutionOutcomeReceipt, RecordExecutionOutcome } from "@paperclipai/shared";
 import type {
   AcceptedPlanDecompositionSummary,
   AskUserQuestionsAnswer,
@@ -307,6 +307,10 @@ export const issuesApi = {
     api.post<{ runId: string; actionId: string; status: "queued"; replayed: boolean }>(`/issues/${id}/recovery-actions/reconstruct-workspace`, data),
   recoveryActions: (id: string) =>
     api.get<{ active: IssueRecoveryAction | null; actions: IssueRecoveryAction[] }>(`/issues/${id}/recovery-actions`),
+  recordExecutionOutcome: (id: string, actionId: string, data: RecordExecutionOutcome) =>
+    api.post<{ receipt: ExecutionOutcomeReceipt; replayed: boolean }>(
+      `/issues/${id}/recovery-actions/${actionId}/record-execution-outcome`, data,
+    ),
   resolveRecoveryAction: (
     id: string,
     data: {
