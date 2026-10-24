@@ -1900,6 +1900,48 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     await expect(fs.access(seeded.worktreePath)).resolves.toBeUndefined();
   });
 
+  it("retries failed archive cleanup under a new lifecycle generation", async () => {
+    const seeded = await seedTerminalWorkspace({ mergedPr: true });
+    await db.update(executionWorkspaces).set({
+      status: "cleanup_failed",
+      closedAt: new Date("2020-01-01T00:00:00Z"),
+      cleanupReason: "Previous worktree removal failed",
+      metadata: { [EXECUTION_WORKSPACE_LIFECYCLE_GENERATION_METADATA_KEY]: 4 },
+    }).where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
+
+    const closedAt = new Date();
+    const result = await svc.archiveWorkspaceUnderLifecycleLock({
+      id: seeded.executionWorkspaceId, patch: {}, closedAt,
+    });
+    expect(result).toMatchObject({ outcome: "archived", capturedGeneration: 5 });
+    const [workspace] = await db.select().from(executionWorkspaces)
+      .where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
+    expect(workspace).toMatchObject({ status: "archived", cleanupReason: null, closedAt });
+    // A late result from the failed attempt cannot overwrite this retry.
+    expect(await svc.applyClosedWorkspaceCleanupOutcome({
+      id: seeded.executionWorkspaceId, closedAt, capturedGeneration: 4,
+      cleanupReason: "Late failure", markCleanupFailed: true,
+    })).toBeNull();
+    // An already successful archive is not a new destruction attempt.
+    expect(await svc.archiveWorkspaceUnderLifecycleLock({
+      id: seeded.executionWorkspaceId, patch: {}, closedAt: new Date(),
+    })).toBeNull();
+  });
+
+  it("keeps the reopen fence when retrying failed archive cleanup", async () => {
+    const seeded = await seedTerminalWorkspace({ mergedPr: true });
+    await db.update(executionWorkspaces).set({
+      status: "cleanup_failed",
+      metadata: {
+        [EXECUTION_WORKSPACE_LIFECYCLE_GENERATION_METADATA_KEY]: 4,
+        [EXECUTION_WORKSPACE_REOPEN_PENDING_METADATA_KEY]: true,
+      },
+    }).where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
+    expect(await svc.archiveWorkspaceUnderLifecycleLock({
+      id: seeded.executionWorkspaceId, patch: {}, closedAt: new Date(),
+    })).toEqual({ outcome: "reopen_pending" });
+  });
+
   it("refuses to archive a reopen-pending workspace and leaves the row unchanged", async () => {
     // Close the second destructive path. The archive route calls
     // archiveWorkspaceUnderLifecycleLock. A reopen published this row active with

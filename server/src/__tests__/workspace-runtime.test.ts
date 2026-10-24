@@ -3937,6 +3937,42 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
     expect(worktreeOp!.metadata!.baseRef).toBe("origin/master");
   }, 10_000);
 
+  it("finishes shared directory cleanup while preserving the project files", async () => {
+    const repoRoot = await createTempRepo();
+    const retainedPath = path.join(repoRoot, "uncommitted.txt");
+    await fs.writeFile(retainedPath, "Keep this work\n", "utf8");
+    const cleanup = await cleanupExecutionWorkspaceArtifacts({
+      workspace: {
+        companyId: "company-1", id: "shared-session", cwd: repoRoot,
+        providerType: "local_fs", providerRef: null, branchName: null,
+        repoUrl: null, baseRef: null, projectId: "project-1",
+        projectWorkspaceId: "workspace-1", sourceIssueId: "issue-1",
+        metadata: { createdByRuntime: false },
+      },
+      projectWorkspace: { cwd: repoRoot, cleanupCommand: null },
+    });
+    expect(cleanup).toMatchObject({ cleaned: true, warnings: [] });
+    expect(await fs.readFile(retainedPath, "utf8")).toBe("Keep this work\n");
+    await expect(fs.stat(path.join(repoRoot, ".git"))).resolves.toBeDefined();
+  });
+
+  it("still refuses to remove a runtime directory containing the project workspace", async () => {
+    const repoRoot = await createTempRepo();
+    const cleanup = await cleanupExecutionWorkspaceArtifacts({
+      workspace: {
+        companyId: "company-1", id: "owned-session", cwd: repoRoot,
+        providerType: "local_fs", providerRef: null, branchName: null,
+        repoUrl: null, baseRef: null, projectId: "project-1",
+        projectWorkspaceId: "workspace-1", sourceIssueId: "issue-1",
+        metadata: { createdByRuntime: true },
+      },
+      projectWorkspace: { cwd: repoRoot, cleanupCommand: null },
+    });
+    expect(cleanup.cleaned).toBe(false);
+    expect(cleanup.warnings).toEqual([expect.stringContaining("contains the project workspace")]);
+    await expect(fs.stat(repoRoot)).resolves.toBeDefined();
+  });
+
   it("removes a created git worktree and branch during cleanup", async () => {
     const repoRoot = await createTempRepo();
 

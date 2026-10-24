@@ -4201,9 +4201,10 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
           .where(and(eq(executionWorkspaces.id, input.id), eq(executionWorkspaces.companyId, identity.companyId)))
           .for("no key update")
           .then((rows) => rows[0] ?? null));
-        if (!fresh || isClosedExecutionWorkspaceStatus(fresh.status)) {
-          // The row is missing or already closed by a concurrent path. Do not
-          // archive again.
+        if (!fresh || fresh.status === "archived") {
+          // A successful close must not repeat destruction. A failed close can
+          // retry under this lock with a new generation, so older cleanup
+          // results cannot overwrite the retry or a concurrently reopened row.
           return null;
         }
         if (metadataHasReopenPendingConsumption(fresh.metadata as Record<string, unknown> | null)) {

@@ -55,6 +55,12 @@ Execution workspaces are durable until a human closes them.
 - Closing an execution workspace stops its runtime services and cleans up its workspace artifacts when allowed.
 - Shared workspaces that point at the project primary checkout are treated more conservatively during cleanup than disposable isolated workspaces.
 
+If cleanup fails, **Retry close** repeats cleanup through the same workspace
+lock and safety checks. A late result from an earlier attempt cannot overwrite
+the retry or a reopened workspace. A successful archive is not repeated.
+Closing a shared session keeps the project directory and its files. Keeping
+that directory is a successful cleanup, not a cleanup failure.
+
 ## Resolved workspace logic during heartbeat runs
 
 Heartbeat resolves a workspace for the run (code location and session continuity) and also brings up that workspace's runtime services.

@@ -4423,6 +4423,9 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
   }
 
   const cleaned =
+    // An operator-owned local directory belongs to the project, not this
+    // session. Keeping it is the expected result of closing a shared session.
+    (input.workspace.providerType === "local_fs" && !createdByRuntime) ||
     !workspacePath ||
     !(await directoryExists(workspacePath));
 
